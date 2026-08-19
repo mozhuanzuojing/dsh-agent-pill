@@ -153,6 +153,58 @@ function fmtTokens(n: number): string {
   return String(n)
 }
 
+/* ── DeepSeek cost estimate (official list prices, USD per 1M tokens) ──── */
+// Source: https://api-docs.deepseek.com/quick_start/pricing — peak hours
+// (Beijing 09:00-12:00, 14:00-18:00) double the price, off-peak halves it.
+const PRICE_INPUT = 0.27
+const PRICE_CACHE_READ = 0.07
+const PRICE_CACHE_WRITE = 0.27
+const PRICE_OUTPUT = 1.10
+/** Estimated context window used for the pressure bar when unknown. */
+const EST_CONTEXT_WINDOW = 200_000
+
+/** Current Beijing-time hour (for peak/off-peak pricing). */
+function bjHour(): number {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Shanghai', hour: '2-digit', hour12: false })
+      .formatToParts(new Date())
+    return parseInt(parts.find(p => p.type === 'hour')?.value ?? '0', 10)
+  } catch {
+    return 0
+  }
+}
+
+/** Peak (2x) / off-peak (0.5x) multiplier by Beijing time. */
+function priceMultiplier(): number {
+  const h = bjHour()
+  return (h >= 9 && h < 12) || (h >= 14 && h < 18) ? 2 : 0.5
+}
+
+/** Estimated session cost in USD from accumulated token accounting. */
+function estimateCostUsd(consumed: { input: number; output: number; cacheRead: number; cacheWrite: number }): number {
+  const mult = priceMultiplier()
+  return (
+    consumed.input * PRICE_INPUT +
+    consumed.cacheRead * PRICE_CACHE_READ +
+    consumed.cacheWrite * PRICE_CACHE_WRITE +
+    consumed.output * PRICE_OUTPUT
+  ) * mult / 1_000_000
+}
+
+/** Browser notification (permission requested lazily; never throws). */
+function notify(title: string, body: string): void {
+  try {
+    if (!('Notification' in window)) return
+    if (Notification.permission === 'granted') {
+      new Notification(title, { body })
+    } else if (Notification.permission === 'default') {
+      void Notification.requestPermission().then((permission) => {
+        if (permission === 'granted') new Notification(title, { body })
+      })
+    }
+  } catch { /* notifications unsupported */ }
+}
+
 /** Durable duration (ZCode goal cards show elapsed time next to the objective). */
 function fmtDur(from: number, now: number): string {
   const s = Math.max(0, Math.floor((now - from) / 1000))
@@ -521,6 +573,34 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
     }
   }, [sessionId])
 
+  // Desktop notifications on settlement transitions (tmux-agent-sidebar
+  // style): workflow ended, job failed, goal completed. Each id fires once.
+  const notifiedRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (state === null) return
+    for (const run of state.agent.workflows ?? []) {
+      const key = `wf:${run.id}`
+      if (run.settled && !notifiedRef.current.has(key)) {
+        notifiedRef.current.add(key)
+        notify(
+          run.stopReason === 'completed' ? 'Workflow completed' : `Workflow finished (${run.stopReason ?? 'ended'})`,
+          run.name,
+        )
+      }
+    }
+    for (const job of state.jobs) {
+      const key = `job:${job.id}`
+      if (job.status === 'failed' && !notifiedRef.current.has(key)) {
+        notifiedRef.current.add(key)
+        notify('Background job failed', job.label)
+      }
+    }
+    if (state.goal?.phase === 'complete' && !notifiedRef.current.has(`goal:${state.goal.id}`)) {
+      notifiedRef.current.add(`goal:${state.goal.id}`)
+      notify('Goal completed', state.goal.objective.slice(0, 80))
+    }
+  }, [state])
+
   // Ctrl+Alt+P toggles the popover; Esc closes it.
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
@@ -651,6 +731,10 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   if (goal !== null && goal.phase !== 'complete') {
     counts.push({ value: 'G', color: PHASE_META[goal.phase]?.color ?? C.yellow, title: `goal: ${goal.phase}` })
   }
+  const inboxCount = state?.agent.inbox ?? 0
+  if (inboxCount > 0) counts.push({ value: 'q', color: C.yellow, title: `${inboxCount} queued message${inboxCount > 1 ? 's' : ''}` })
+  const toolName = state?.agent.tool
+  const fleet = state?.agents ?? []
 
   return createElement('div', { ref: rootRef },
     // ── Capsule (draggable; click toggles the popover) ──
@@ -703,7 +787,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
         dragRef.current = null
         setDragging(false)
       },
-      title: `Agent activity (${counts.map(c => c.title).join(', ') || 'idle'}) — drag to move, click or Ctrl+Alt+P for panel`,
+      title: `Agent activity (${counts.map(c => c.title).join(', ') || 'idle'})${toolName !== undefined ? ` — running ${toolName}` : ''} — drag to move, click or Ctrl+Alt+P for panel`,
       'aria-label': 'Agent activity',
       'aria-pressed': open,
       style: {
@@ -793,6 +877,16 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                     value: state.agent.status,
                     color: state.agent.status === 'running' ? C.yellow : state.agent.status === 'idle' ? C.green : C.faint,
                   }),
+                  state.agent.tool !== undefined
+                    ? createElement(Row, { label: 'tool', value: state.agent.tool, color: C.purple })
+                    : null,
+                  state.agent.inbox !== undefined && state.agent.inbox > 0
+                    ? createElement(Row, {
+                      label: 'queued',
+                      value: `${state.agent.inbox} message${state.agent.inbox > 1 ? 's' : ''} waiting`,
+                      color: C.yellow,
+                    })
+                    : null,
                   createElement(WorkflowList, { state }),
                 ),
               createElement(Section, {
@@ -819,6 +913,27 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                     ? null
                     : state.usage !== undefined
                       ? createElement('div', null,
+                        // Context pressure bar (claude-statusline style):
+                        // threshold colors, rainbow at very high usage.
+                        (() => {
+                          const ratio = Math.min(1, state.usage.totalTokens / EST_CONTEXT_WINDOW)
+                          const barColor = ratio > 0.95
+                            ? 'linear-gradient(90deg,#e05a5a,#d9a13b,#3fb96a,#5a9cf0,#a37de8,#e05a5a)'
+                            : ratio > 0.85 ? C.red
+                            : ratio > 0.6 ? C.yellow
+                            : C.green
+                          return createElement('div', {
+                            style: { margin: '4px 0 6px', height: 6, borderRadius: 3, background: C.bg, overflow: 'hidden' },
+                            title: `${Math.round(ratio * 100)}% of ~${fmtTokens(EST_CONTEXT_WINDOW)} context window`,
+                          },
+                            createElement('div', {
+                              style: {
+                                height: '100%', width: `${Math.round(ratio * 100)}%`,
+                                background: barColor, borderRadius: 3,
+                              },
+                            }),
+                          )
+                        })(),
                         createElement(Row, { label: 'pressure', value: fmtTokens(state.usage.totalTokens), color: C.text }),
                         createElement(Row, { label: 'surface', value: fmtTokens(state.usage.surfaceTokens), color: C.text }),
                         createElement(Row, {
@@ -826,8 +941,48 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                           value: fmtTokens(state.usage.surfaceDeltaTokens),
                           color: state.usage.surfaceDeltaTokens >= 0 ? C.text : C.green,
                         }),
+                        state.consumed !== undefined
+                          ? createElement(Row, {
+                            label: 'cost',
+                            value: `~$${estimateCostUsd(state.consumed).toFixed(2)} · ${fmtTokens(
+                              state.consumed.input + state.consumed.cacheRead + state.consumed.cacheWrite + state.consumed.output,
+                            )} tok${priceMultiplier() > 1 ? ' · peak' : ' · off-peak'}`,
+                            color: priceMultiplier() > 1 ? C.yellow : C.text,
+                          })
+                          : null,
                       )
                       : createElement('div', { style: { color: C.faint, fontSize: 12, padding: '4px 0' } }, 'unavailable'),
+                )
+                : null,
+              fleet.length > 0
+                ? createElement('div', null,
+                  createElement(Section, {
+                    title: 'Sessions', count: fleet.length,
+                    onToggle: () => toggleSection('sessions'), collapsed: collapsed.sessions === true,
+                  }),
+                  collapsed.sessions === true
+                    ? null
+                    : fleet.map((entry) => {
+                      const active = entry.status === 'running'
+                      return createElement('div', {
+                        key: entry.id,
+                        style: { display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' },
+                      },
+                        createElement('span', {
+                          style: { width: 7, height: 7, borderRadius: 4, flexShrink: 0, background: active ? C.yellow : C.faint },
+                        }),
+                        createElement('span', {
+                          style: { fontSize: 11, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+                          title: entry.id,
+                        }, entry.id.slice(0, 22)),
+                        entry.goal !== undefined
+                          ? createElement('span', {
+                            style: { fontSize: 10, color: C.faint, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140 },
+                            title: entry.goal,
+                          }, entry.goal)
+                          : null,
+                      )
+                    }),
                 )
                 : null,
               !state.services.goals || !state.services.subagents || !state.services.jobs

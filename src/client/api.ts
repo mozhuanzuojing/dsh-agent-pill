@@ -78,7 +78,26 @@ export interface PillUsage {
 /** Wire view of the live agent for the session. */
 export interface PillAgent {
   status: 'idle' | 'running' | 'absent'
+  /** Latest observed tool-call name (from the session event feed). */
+  tool?: string
+  /** Queued (inbox) message count. */
+  inbox?: number
   workflows?: PillWorkflowRun[]
+}
+
+/** Accumulated adapter-reported token accounting for the session. */
+export interface PillConsumed {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
+/** One global live agent (fleet overview). */
+export interface PillFleetAgent {
+  id: string
+  status: unknown
+  goal?: string
 }
 
 /** Wire view of one background job. */
@@ -101,6 +120,8 @@ export interface PillState {
   subagents: PillSubagent[]
   jobs: PillJob[]
   usage?: PillUsage
+  consumed?: PillConsumed
+  agents?: PillFleetAgent[]
   services: { goals: boolean; subagents: boolean; jobs: boolean; agents: boolean; usage: boolean }
 }
 
