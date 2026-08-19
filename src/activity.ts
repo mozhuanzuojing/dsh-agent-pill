@@ -211,14 +211,21 @@ export class ActivityTracker {
   // ── Per-session live surface: current tool call, token accounting, inbox ──
 
   private readonly toolCalls = new Map<string, { name: string; ts: number }>()
+  /** In-flight tool (single-slot: DSH tools execute serially) for duration pairing. */
+  private readonly currentTools = new Map<string, { name: string; startedAt: number }>()
+  /** Recently completed tools: {name, durationMs}, newest first (bounded). */
+  private readonly recentTools = new Map<string, Array<{ name: string; durationMs: number }>>()
   private readonly usage = new Map<string, SessionUsage>()
   private readonly inboxCounts = new Map<string, number>()
 
   /**
    * Observe one `session/event` append: track the latest tool call (the
-   * `tool/call` event carries the tool `name` directly) and accumulate the
-   * step `usage` accounting (the `assistant/message` event carries the
-   * step's `usage` when the adapter reported it). Defensive reads throughout.
+   * `tool/call` event carries the tool `name` directly; `tool/result`
+   * closes the in-flight slot for duration pairing — the result event has
+   * no callId at its top level, and DSH executes tools serially, so a
+   * single slot is the right pairing model) and accumulate the step `usage`
+   * accounting (the `assistant/message` event carries the step's `usage`
+   * when the adapter reported it). Defensive reads throughout.
    */
   onSessionEvent(sessionId: string, event: unknown): void {
     if (typeof event !== 'object' || event === null) return
@@ -228,7 +235,21 @@ export class ActivityTracker {
 
     if (record.type === 'tool/call') {
       const name = typeof data.name === 'string' && data.name !== '' ? data.name : undefined
-      if (name !== undefined) this.toolCalls.set(sessionId, { name, ts: Date.now() })
+      if (name === undefined) return
+      const now = Date.now()
+      this.toolCalls.set(sessionId, { name, ts: now })
+      this.currentTools.set(sessionId, { name, startedAt: now })
+      return
+    }
+
+    if (record.type === 'tool/result') {
+      const inFlight = this.currentTools.get(sessionId)
+      if (inFlight !== undefined) {
+        const list = this.recentTools.get(sessionId) ?? []
+        list.unshift({ name: inFlight.name, durationMs: Date.now() - inFlight.startedAt })
+        this.recentTools.set(sessionId, list.slice(0, 5))
+        this.currentTools.delete(sessionId)
+      }
       return
     }
 
@@ -237,16 +258,19 @@ export class ActivityTracker {
       if (typeof usage !== 'object' || usage === null) return
       const u = usage as Record<string, unknown>
       const current = this.usage.get(sessionId) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
-      const add = (key: 'input' | 'output' | 'cacheRead' | 'cacheWrite'): void => {
-        const value = u[key]
+      // TokenUsage field names (dsh-llm): *Tokens suffixes.
+      const fields: Array<[keyof SessionUsage, string]> = [
+        ['input', 'inputTokens'],
+        ['output', 'outputTokens'],
+        ['cacheRead', 'cacheReadTokens'],
+        ['cacheWrite', 'cacheWriteTokens'],
+      ]
+      for (const [field, tokenKey] of fields) {
+        const value = u[tokenKey]
         if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
-          current[key] += value
+          current[field] += value
         }
       }
-      add('input')
-      add('output')
-      add('cacheRead')
-      add('cacheWrite')
       this.usage.set(sessionId, current)
     }
   }
@@ -261,6 +285,16 @@ export class ActivityTracker {
   /** The latest observed tool-call name for one session (undefined when none). */
   toolCallOf(sessionId: string): string | undefined {
     return this.toolCalls.get(sessionId)?.name
+  }
+
+  /** When the current tool started (host clock; undefined when none). */
+  toolSinceOf(sessionId: string): number | undefined {
+    return this.currentTools.get(sessionId)?.startedAt
+  }
+
+  /** Recently completed tools for one session (newest first, bounded). */
+  recentToolsOf(sessionId: string): Array<{ name: string; durationMs: number }> {
+    return [...(this.recentTools.get(sessionId) ?? [])]
   }
 
   /** Accumulated adapter-reported token usage for one session. */

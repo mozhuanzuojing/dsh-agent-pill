@@ -401,6 +401,32 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
     return usageCache
   }
 
+  // Real context window for the current model (60s cache; falls back to the
+  // client's assumed window when the llm service or the model info is absent).
+  const llm = ctx.get('llm')
+  const agentDefaultModel = ctx.get('agentDefaultModel')
+  let contextWindowAt = 0
+  let contextWindowCache: number | undefined
+  const contextWindowOf = async (): Promise<number | undefined> => {
+    if (llm === undefined) return undefined
+    const now = Date.now()
+    if (now - contextWindowAt < 60_000) return contextWindowCache
+    contextWindowAt = now
+    contextWindowCache = undefined
+    try {
+      const selection = agentDefaultModel?.currentSelection?.()
+      const provider = selection?.provider
+      const model = selection?.model
+      if (typeof provider === 'string' && typeof model === 'string') {
+        const resolved = await llm.resolveModelInfo(provider, model)
+        contextWindowCache = resolved?.context?.contextWindow
+      }
+    } catch {
+      contextWindowCache = undefined
+    }
+    return contextWindowCache
+  }
+
   return {
     'state': async (payload) => {
       const sessionId = requireString(payload, 'sessionId')
@@ -408,9 +434,12 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
       const subagents = await refreshSubagents(sessionId)
       const workflows = tracker.workflowHistory()
       const usage = usageOf(sessionId)
+      const contextWindow = await contextWindowOf()
       const consumed = tracker.usageOf(sessionId)
       const hasConsumed = consumed.input > 0 || consumed.output > 0 || consumed.cacheRead > 0 || consumed.cacheWrite > 0
       const tool = tracker.toolCallOf(sessionId)
+      const toolSince = tracker.toolSinceOf(sessionId)
+      const recentTools = tracker.recentToolsOf(sessionId)
       const inbox = tracker.inboxCountOf(sessionId)
       // Global agent fleet (tasklight / tmux-agent-sidebar style overview):
       // every live agent with its status and goal objective snippet.
@@ -428,6 +457,8 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
         agent: {
           status: agent?.status ?? 'absent',
           ...(agent !== undefined && tool !== undefined ? { tool } : {}),
+          ...(agent !== undefined && toolSince !== undefined ? { toolSince } : {}),
+          ...(recentTools.length > 0 ? { recentTools } : {}),
           ...(agent !== undefined && inbox > 0 ? { inbox } : {}),
           ...(workflows.length > 0 ? { workflows } : {}),
         },
@@ -441,7 +472,7 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
           startedAt: job.startedAt,
           finishedAt: job.finishedAt,
         })),
-        ...(usage !== null ? { usage } : {}),
+        ...(usage !== null ? { usage: { ...usage, ...(contextWindow !== undefined ? { contextWindow } : {}) } } : {}),
         ...(hasConsumed ? { consumed } : {}),
         ...(fleet.length > 0 ? { agents: fleet } : {}),
         services: {
