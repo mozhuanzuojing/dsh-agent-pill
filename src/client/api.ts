@@ -47,14 +47,25 @@ export interface PillSubagent {
   reason?: 'corrupt' | 'unsupported' | 'unavailable'
 }
 
-/** Wire view of the most recent workflow run (global, host process). */
-export interface PillWorkflow {
+/** One `agent()` call step inside a workflow run. */
+export interface PillWorkflowStep {
+  seq: number
+  label: string
+  phase?: string
+  childId?: string
+  outcome?: string
+}
+
+/** One workflow run with its collected details (bounded history). */
+export interface PillWorkflowRun {
   id: string
   name: string
   phase: string | null
   startedAt: number
   settled: boolean
   stopReason?: string
+  steps: PillWorkflowStep[]
+  files: string[]
 }
 
 /** Throttled token-meter snapshot for the current session. */
@@ -67,7 +78,7 @@ export interface PillUsage {
 /** Wire view of the live agent for the session. */
 export interface PillAgent {
   status: 'idle' | 'running' | 'absent'
-  workflow?: PillWorkflow
+  workflows?: PillWorkflowRun[]
 }
 
 /** Wire view of one background job. */

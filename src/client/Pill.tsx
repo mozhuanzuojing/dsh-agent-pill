@@ -10,7 +10,7 @@
  */
 import { createElement, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ISessions } from '@deepseek-ai/dsh-client-runtime/client'
-import { api, PillApiError, type PillJob, type PillState, type PillSubagent } from './api.ts'
+import { api, PillApiError, type PillJob, type PillState, type PillSubagent, type PillWorkflowRun } from './api.ts'
 
 /**
  * Theme-driven palette stylesheet. Dark is the :root default (matching the
@@ -81,11 +81,24 @@ function Row(props: { label: string; value: string; color?: string }): JSX.Eleme
   )
 }
 
-/** Section header. */
-function Section(props: { title: string; count?: number; right?: JSX.Element }): JSX.Element {
-  return createElement('div', { style: sectionStyle },
-    createElement('span', { style: { color: C.faint, fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase' as const } },
-      props.title + (props.count !== undefined ? ` (${props.count})` : '')),
+/** Section header, optionally collapsible (click toggles). */
+function Section(props: {
+  title: string
+  count?: number
+  right?: JSX.Element
+  onToggle?: () => void
+  collapsed?: boolean
+}): JSX.Element {
+  const collapsible = props.onToggle !== undefined
+  return createElement('div', {
+    style: { ...sectionStyle, ...(collapsible ? { cursor: 'pointer' } : {}) },
+    ...(collapsible
+      ? { onClick: props.onToggle, title: props.collapsed === true ? 'Expand section' : 'Collapse section' }
+      : {}),
+  },
+    createElement('span', {
+      style: { color: C.faint, fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase' as const },
+    }, `${collapsible ? (props.collapsed === true ? '▸ ' : '▾ ') : ''}${props.title}${props.count !== undefined ? ` (${props.count})` : ''}`),
     props.right ?? null,
   )
 }
@@ -371,7 +384,87 @@ function JobList(props: { state: PillState; onAction: () => void }): JSX.Element
   )
 }
 
-/* ── Root: capsule + drawer ─────────────────────────────────────────────── */
+/* ── Workflow history: runs with steps and observed files ──────────────── */
+
+function WorkflowRow(props: { run: PillWorkflowRun; ts: number }): JSX.Element {
+  const { run, ts } = props
+  const [expanded, setExpanded] = useState(false)
+  const statusColor = run.settled
+    ? run.stopReason === 'completed' ? C.green
+      : run.stopReason === 'error' ? C.red
+      : C.dim
+    : C.yellow
+  const outcomeColor = (outcome: string | undefined): string =>
+    outcome === 'completed' ? C.green : outcome === 'failed' ? C.red : outcome === 'cancelled' ? C.dim : C.faint
+  const fileBase = (path: string): string => path.split(/[\\/]/).pop() ?? path
+  return createElement('div', { style: { marginBottom: 6 } },
+    createElement('div', {
+      onClick: () => setExpanded(prev => !prev),
+      style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', cursor: 'pointer', borderRadius: 6, background: C.panel2, border: `1px solid ${C.border}` },
+      title: run.id,
+    },
+      createElement('span', { style: { width: 7, height: 7, borderRadius: 4, background: statusColor, flexShrink: 0 } }),
+      createElement('span', {
+        style: { fontSize: 12, color: C.text, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+      }, run.name),
+      createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } },
+        `${run.settled ? (run.stopReason ?? 'ended') : (run.phase ?? 'starting')} · ${fmtDur(run.startedAt, ts)}`),
+      createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, expanded ? '▾' : '▸'),
+    ),
+    expanded
+      ? createElement('div', { style: { padding: '6px 4px 2px 10px' } },
+        createElement('div', { style: { color: C.faint, fontSize: 10, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, 'Steps'),
+        run.steps.length === 0
+          ? createElement('div', { style: { color: C.faint, fontSize: 11, padding: '2px 0' } }, 'no agent calls observed')
+          : run.steps.map((step) => createElement('div', {
+            key: step.seq,
+            style: { display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' },
+          },
+            createElement('span', { style: { color: C.faint, fontSize: 10, minWidth: 22, fontVariantNumeric: 'tabular-nums' } }, `#${step.seq}`),
+            createElement('span', {
+              style: { fontSize: 12, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+              title: step.childId ?? step.label,
+            }, step.label),
+            step.phase !== undefined
+              ? createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, step.phase)
+              : null,
+            step.outcome !== undefined
+              ? createElement('span', { style: { color: outcomeColor(step.outcome), fontSize: 10, flexShrink: 0 } }, step.outcome)
+              : null,
+          )),
+        run.files.length > 0
+          ? createElement('div', null,
+            createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 6, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, `Files observed (${run.files.length})`),
+            createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 4 } },
+              run.files.map((file) => createElement('span', {
+                key: file,
+                title: file,
+                style: {
+                  fontSize: 10, color: C.text, background: C.bg, border: `1px solid ${C.border}`,
+                  borderRadius: 4, padding: '1px 6px', maxWidth: 220,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                },
+              }, fileBase(file))),
+            ),
+          )
+          : null,
+      )
+      : null,
+  )
+}
+
+function WorkflowList(props: { state: PillState }): JSX.Element {
+  const { state } = props
+  const workflows = state.agent.workflows ?? []
+  if (workflows.length === 0) {
+    return createElement('div', { style: { color: C.faint, fontSize: 12, padding: '4px 0' } }, 'No workflow runs')
+  }
+  return createElement('div', null,
+    workflows.map((run) => createElement(WorkflowRow, { key: run.id, run, ts: state.ts })),
+  )
+}
+
+/* ── Root: capsule + popover ───────────────────────────────────────────── */
 
 function PillRoot(props: { sessions: ISessions }): JSX.Element {
   const { sessions } = props
@@ -428,22 +521,93 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
     }
   }, [sessionId])
 
-  // Ctrl+Alt+P toggles the drawer.
+  // Ctrl+Alt+P toggles the popover; Esc closes it.
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.ctrlKey && event.altKey && (event.key === 'p' || event.key === 'P')) {
         event.preventDefault()
         setOpen(prev => !prev)
+      } else if (event.key === 'Escape') {
+        setOpen(false)
       }
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
   }, [])
 
-  // Close the drawer when switching sessions.
+  // Click outside the capsule+popover closes the popover (no overlay).
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: PointerEvent): void => {
+      if (rootRef.current !== null && !rootRef.current.contains(event.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    return () => document.removeEventListener('pointerdown', onPointerDown, true)
+  }, [open])
+
+  // Close the popover when switching sessions.
   useEffect(() => {
     setOpen(false)
   }, [sessionId])
+
+  // Popover geometry: anchored to the capsule, flipped to stay in viewport.
+  const capsuleRef = useRef<HTMLButtonElement>(null)
+  const [panelPos, setPanelPos] = useState<{ top: number; left: number } | null>(null)
+  useEffect(() => {
+    if (!open) return
+    const compute = (): void => {
+      const el = capsuleRef.current
+      if (el === null) return
+      const rect = el.getBoundingClientRect()
+      const width = Math.min(360, window.innerWidth - 16)
+      const maxHeight = Math.min(Math.floor(window.innerHeight * 0.7), window.innerHeight - 16)
+      let top = rect.bottom + 8
+      let left = rect.left
+      // Flip up when there is not enough room below; right-align (shift
+      // left) when the panel would run past the right edge.
+      if (top + maxHeight > window.innerHeight - 8) top = Math.max(8, rect.top - 8 - maxHeight)
+      if (left + width > window.innerWidth - 8) left = Math.max(8, rect.right - width)
+      setPanelPos({ top, left })
+    }
+    compute()
+    window.addEventListener('resize', compute)
+    return () => window.removeEventListener('resize', compute)
+  }, [open])
+
+  // Collapsible sections, remembered in localStorage.
+  const SECTION_KEY = 'dsh-agent-pill.sections'
+  const loadSectionState = (): Record<string, boolean> => {
+    try {
+      const raw = window.localStorage.getItem(SECTION_KEY)
+      if (raw === null) return {}
+      const parsed = JSON.parse(raw) as Record<string, unknown>
+      const out: Record<string, boolean> = {}
+      for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value === 'boolean') out[key] = value
+      }
+      return out
+    } catch {
+      return {}
+    }
+  }
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadSectionState)
+  const toggleSection = (key: string): void => {
+    setCollapsed(prev => {
+      const next = { ...prev, [key]: !(prev[key] ?? false) }
+      try { window.localStorage.setItem(SECTION_KEY, JSON.stringify(next)) } catch { /* private mode */ }
+      return next
+    })
+  }
+
+  // Activity summary driving the capsule.
+  const goal = state?.goal ?? null
+  const goalActive = goal !== null && (goal.phase === 'active' || goal.phase === 'paused' || goal.phase === 'blocked')
+  const workflows = state?.agent.workflows ?? []
+  const runningWorkflow = workflows.find(run => !run.settled)
+  const workflowRunning = runningWorkflow !== undefined
 
   // Keep a dragged seat inside the viewport after window resizes.
   useEffect(() => {
@@ -466,11 +630,6 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
-  // Activity summary driving the capsule.
-  const goal = state?.goal ?? null
-  const goalActive = goal !== null && (goal.phase === 'active' || goal.phase === 'paused' || goal.phase === 'blocked')
-  const workflow = state?.agent.workflow
-  const workflowRunning = workflow !== undefined && !workflow.settled
   const runningSubagents = state?.subagents.filter(s => s.kind === 'child' && s.activity === 'running').length ?? 0
   const runningJobs = state?.jobs.filter(j => j.status === 'running' || j.status === 'stopping').length ?? 0
   const failedJobs = state?.jobs.filter(j => j.status === 'failed').length ?? 0
@@ -484,18 +643,19 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   const counts: Array<{ value: string; color: string; title: string }> = []
   if (runningSubagents > 0) counts.push({ value: String(runningSubagents), color: C.purple, title: 'running subagents' })
   if (runningJobs > 0) counts.push({ value: String(runningJobs), color: C.blue, title: 'running jobs' })
-  if (workflowRunning) counts.push({
+  if (workflowRunning && runningWorkflow !== undefined) counts.push({
     value: 'wf', color: C.purple,
-    title: `workflow: ${workflow.name}${workflow.phase !== null ? ` · ${workflow.phase}` : ''}`,
+    title: `workflow: ${runningWorkflow.name}${runningWorkflow.phase !== null ? ` · ${runningWorkflow.phase}` : ''}`,
   })
   if (failedJobs > 0) counts.push({ value: String(failedJobs), color: C.red, title: 'failed jobs' })
   if (goal !== null && goal.phase !== 'complete') {
     counts.push({ value: 'G', color: PHASE_META[goal.phase]?.color ?? C.yellow, title: `goal: ${goal.phase}` })
   }
 
-  return createElement('div', null,
-    // ── Capsule (draggable; click toggles the drawer) ──
+  return createElement('div', { ref: rootRef },
+    // ── Capsule (draggable; click toggles the popover) ──
     createElement('button', {
+      ref: capsuleRef,
       onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
         // The click immediately following a drag end must not toggle.
         if (suppressClickRef.current) {
@@ -579,14 +739,16 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
         title: count.title,
       }, count.value)),
     ),
-    // ── Drawer ──
-    open
+    // ── Popover (tooltip-style, anchored to the capsule, viewport-flipped) ──
+    open && panelPos !== null
       ? createElement('div', {
         style: {
-          position: 'fixed', top: 0, right: 0, bottom: 0, width: 348, zIndex: 2147483002,
-          background: C.bg, borderLeft: `1px solid ${C.border}`,
-          display: 'flex', flexDirection: 'column',
-          boxShadow: 'var(--pill-shadow-side)',
+          position: 'fixed', top: panelPos.top, left: panelPos.left,
+          width: Math.min(360, window.innerWidth - 16),
+          maxHeight: '70vh', zIndex: 2147483002,
+          background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10,
+          display: 'flex', flexDirection: 'column', overflow: 'hidden',
+          boxShadow: 'var(--pill-shadow)',
           fontFamily: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
         },
       },
@@ -604,52 +766,68 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
               : null,
           ),
           createElement('button', {
-            onClick: () => setOpen(false), 'aria-label': 'Close', title: 'Close (Ctrl+Alt+P)',
+            onClick: () => setOpen(false), 'aria-label': 'Close', title: 'Close (Esc / Ctrl+Alt+P)',
             style: { ...iconButtonStyle, fontSize: 13, padding: '2px 9px' },
           }, '✕'),
         ),
-        // ── Scrollable body ──
+        // ── Scrollable body with collapsible sections ──
         createElement('div', { style: { flex: 1, overflowY: 'auto', padding: '4px 14px 20px' } },
           state === null
             ? createElement('div', { style: { color: C.faint, fontSize: 12, padding: '16px 0' } },
               sessionId === undefined ? 'No active conversation' : 'Loading…')
             : createElement('div', null,
-              createElement(Section, { title: 'Goal' }),
-              createElement(GoalCard, { state, onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) } }),
-              createElement(Section, { title: 'Agent' }),
-              createElement(Row, {
-                label: 'status',
-                value: state.agent.status,
-                color: state.agent.status === 'running' ? C.yellow : state.agent.status === 'idle' ? C.green : C.faint,
+              createElement(Section, {
+                title: 'Goal', onToggle: () => toggleSection('goal'), collapsed: collapsed.goal === true,
               }),
-              state.agent.workflow !== undefined
-                ? createElement(Row, {
-                  label: 'workflow',
-                  value: `${state.agent.workflow.name}${state.agent.workflow.phase !== null ? ` · ${state.agent.workflow.phase}` : ''}${state.agent.workflow.settled ? ` · ${state.agent.workflow.stopReason ?? 'ended'}` : ` · ${fmtDur(state.agent.workflow.startedAt, state.ts)}`}`,
-                  color: state.agent.workflow.settled ? C.faint : C.purple,
-                })
-                : null,
+              collapsed.goal === true
+                ? null
+                : createElement(GoalCard, { state, onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) } }),
+              createElement(Section, {
+                title: 'Agent', onToggle: () => toggleSection('agent'), collapsed: collapsed.agent === true,
+              }),
+              collapsed.agent === true
+                ? null
+                : createElement('div', null,
+                  createElement(Row, {
+                    label: 'status',
+                    value: state.agent.status,
+                    color: state.agent.status === 'running' ? C.yellow : state.agent.status === 'idle' ? C.green : C.faint,
+                  }),
+                  createElement(WorkflowList, { state }),
+                ),
               createElement(Section, {
                 title: 'Subagents',
                 count: state.subagents.filter(s => s.kind === 'child').length,
+                onToggle: () => toggleSection('subagents'), collapsed: collapsed.subagents === true,
               }),
-              createElement(SubagentList, { state, onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) } }),
-              createElement(Section, { title: 'Jobs', count: state.jobs.length }),
-              createElement(JobList, { state, onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) } }),
+              collapsed.subagents === true
+                ? null
+                : createElement(SubagentList, { state, onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) } }),
+              createElement(Section, {
+                title: 'Jobs', count: state.jobs.length,
+                onToggle: () => toggleSection('jobs'), collapsed: collapsed.jobs === true,
+              }),
+              collapsed.jobs === true
+                ? null
+                : createElement(JobList, { state, onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) } }),
               state.services.usage
                 ? createElement('div', null,
-                  createElement(Section, { title: 'Usage' }),
-                  state.usage !== undefined
-                    ? createElement('div', null,
-                      createElement(Row, { label: 'pressure', value: fmtTokens(state.usage.totalTokens), color: C.text }),
-                      createElement(Row, { label: 'surface', value: fmtTokens(state.usage.surfaceTokens), color: C.text }),
-                      createElement(Row, {
-                        label: 'delta',
-                        value: fmtTokens(state.usage.surfaceDeltaTokens),
-                        color: state.usage.surfaceDeltaTokens >= 0 ? C.text : C.green,
-                      }),
-                    )
-                    : createElement('div', { style: { color: C.faint, fontSize: 12, padding: '4px 0' } }, 'unavailable'),
+                  createElement(Section, {
+                    title: 'Usage', onToggle: () => toggleSection('usage'), collapsed: collapsed.usage === true,
+                  }),
+                  collapsed.usage === true
+                    ? null
+                    : state.usage !== undefined
+                      ? createElement('div', null,
+                        createElement(Row, { label: 'pressure', value: fmtTokens(state.usage.totalTokens), color: C.text }),
+                        createElement(Row, { label: 'surface', value: fmtTokens(state.usage.surfaceTokens), color: C.text }),
+                        createElement(Row, {
+                          label: 'delta',
+                          value: fmtTokens(state.usage.surfaceDeltaTokens),
+                          color: state.usage.surfaceDeltaTokens >= 0 ? C.text : C.green,
+                        }),
+                      )
+                      : createElement('div', { style: { color: C.faint, fontSize: 12, padding: '4px 0' } }, 'unavailable'),
                 )
                 : null,
               !state.services.goals || !state.services.subagents || !state.services.jobs
