@@ -38,7 +38,36 @@ export interface PillSubagent {
   label?: string
   parentId?: string
   depth?: number
+  /** Process-local observation: when the child started (host clock). */
+  startedAt?: number
+  /** Process-local observation: when the child settled (host clock). */
+  finishedAt?: number
+  /** Process-local observation: the terminal stop reason. */
+  stopReason?: string
   reason?: 'corrupt' | 'unsupported' | 'unavailable'
+}
+
+/** Wire view of the most recent workflow run (global, host process). */
+export interface PillWorkflow {
+  id: string
+  name: string
+  phase: string | null
+  startedAt: number
+  settled: boolean
+  stopReason?: string
+}
+
+/** Throttled token-meter snapshot for the current session. */
+export interface PillUsage {
+  totalTokens: number
+  surfaceTokens: number
+  surfaceDeltaTokens: number
+}
+
+/** Wire view of the live agent for the session. */
+export interface PillAgent {
+  status: 'idle' | 'running' | 'absent'
+  workflow?: PillWorkflow
 }
 
 /** Wire view of one background job. */
@@ -57,10 +86,11 @@ export interface PillState {
   sessionId: string
   ts: number
   goal: PillGoal | null
-  agent: { status: 'idle' | 'running' | 'absent' }
+  agent: PillAgent
   subagents: PillSubagent[]
   jobs: PillJob[]
-  services: { goals: boolean; subagents: boolean; jobs: boolean; agents: boolean }
+  usage?: PillUsage
+  services: { goals: boolean; subagents: boolean; jobs: boolean; agents: boolean; usage: boolean }
 }
 
 async function call<T>(method: string, payload: Record<string, unknown>, signal?: AbortSignal): Promise<T> {

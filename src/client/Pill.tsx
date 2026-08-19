@@ -134,6 +134,12 @@ function fmtAgo(ms: number, now: number): string {
   return `${Math.floor(s / 3600)}h`
 }
 
+/** Compact token count: 12345 → "12.3k", -500 → "-500". */
+function fmtTokens(n: number): string {
+  if (Math.abs(n) >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
+}
+
 /** Durable duration (ZCode goal cards show elapsed time next to the objective). */
 function fmtDur(from: number, now: number): string {
   const s = Math.max(0, Math.floor((now - from) / 1000))
@@ -198,6 +204,20 @@ function GoalCard(props: { state: PillState; onAction: () => void }): JSX.Elemen
         ? createElement('span', { style: { color: C.faint, fontSize: 10 } }, `activation: ${goal.activation}`)
         : null,
     ),
+    goal.maxGoalRounds > 0
+      ? createElement('div', {
+        style: { height: 5, borderRadius: 3, background: C.bg, overflow: 'hidden', marginBottom: 6 },
+        title: `${goal.roundsStarted}/${goal.maxGoalRounds} rounds`,
+      },
+        createElement('div', {
+          style: {
+            height: '100%',
+            width: `${Math.min(100, Math.round((goal.roundsStarted / goal.maxGoalRounds) * 100))}%`,
+            background: meta.color, borderRadius: 3,
+          },
+        }),
+      )
+      : null,
     goal.blockedReason !== undefined
       ? createElement('div', { style: { color: C.red, fontSize: 11, marginBottom: 6 } }, goal.blockedReason.message)
       : null,
@@ -232,31 +252,42 @@ function SubagentList(props: { state: PillState; onAction: () => void }): JSX.El
       .then(onAction)
   }
   return createElement('div', null, [
-    ...children.map((child) => createElement('div', {
-      key: child.id,
-      style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' },
-    },
-      createElement('span', {
-        style: {
-          width: 7, height: 7, borderRadius: 4, flexShrink: 0,
-          background: child.activity === 'running' ? C.yellow : C.faint,
-        },
-      }),
-      createElement('div', { style: { flex: 1, minWidth: 0 } },
-        createElement('div', {
-          style: { fontSize: 12, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-          title: child.id,
-        }, child.label ?? child.id),
-        createElement('div', { style: { color: C.faint, fontSize: 10 } },
-          `${child.mode ?? 'one-shot'} · ${child.activity ?? 'inactive'}${child.depth !== undefined && child.depth > 1 ? ` · depth ${child.depth}` : ''}`),
-      ),
-      createElement('button', {
-        onClick: () => stop(child.id),
-        title: `Interrupt ${child.id}`,
-        'aria-label': `Interrupt ${child.id}`,
-        style: iconButtonStyleSmall,
-      }, 'stop'),
-    )),
+    ...children.map((child) => {
+      const now = state.ts
+      const indent = 8 + (child.depth ?? 0) * 14
+      const elapsed = child.startedAt !== undefined
+        ? child.finishedAt !== undefined
+          ? ` · ran ${fmtDur(child.startedAt, child.finishedAt)}`
+          : ` · ${fmtDur(child.startedAt, now)}`
+        : ''
+      const settled = child.stopReason !== undefined ? ` · ${child.stopReason}` : ''
+      const metaColor = child.stopReason === 'failed' ? C.red : C.faint
+      return createElement('div', {
+        key: child.id,
+        style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', paddingLeft: indent },
+      },
+        createElement('span', {
+          style: {
+            width: 7, height: 7, borderRadius: 4, flexShrink: 0,
+            background: child.activity === 'running' ? C.yellow : C.faint,
+          },
+        }),
+        createElement('div', { style: { flex: 1, minWidth: 0 } },
+          createElement('div', {
+            style: { fontSize: 12, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+            title: child.id,
+          }, child.label ?? child.id),
+          createElement('div', { style: { color: metaColor, fontSize: 10 } },
+            `${child.mode ?? 'one-shot'} · ${child.activity ?? 'inactive'}${elapsed}${settled}`),
+        ),
+        createElement('button', {
+          onClick: () => stop(child.id),
+          title: `Interrupt ${child.id}`,
+          'aria-label': `Interrupt ${child.id}`,
+          style: iconButtonStyleSmall,
+        }, 'stop'),
+      )
+    }),
     ...diagnostics.map((d) => createElement('div', {
       key: d.id, style: { color: C.red, fontSize: 11, padding: '2px 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
       title: d.id,
@@ -264,14 +295,17 @@ function SubagentList(props: { state: PillState; onAction: () => void }): JSX.El
   ])
 }
 
-function JobRow(props: { job: PillJob; sessionId: string; onAction: () => void }): JSX.Element {
-  const { job, sessionId, onAction } = props
+function JobRow(props: { job: PillJob; sessionId: string; now: number; onAction: () => void }): JSX.Element {
+  const { job, sessionId, now, onAction } = props
   const [output, setOutput] = useState<{ text: string; truncated: boolean; read: boolean } | 'loading' | null>(null)
   const [busy, setBusy] = useState(false)
   const statusColor = job.status === 'running' || job.status === 'stopping' ? C.yellow
     : job.status === 'completed' ? C.green
     : job.status === 'killed' ? C.dim
     : C.red
+  const timing = job.finishedAt !== undefined
+    ? ` · took ${fmtDur(job.startedAt, job.finishedAt)} (${fmtAgo(job.finishedAt, now)} ago)`
+    : ` · started ${fmtAgo(job.startedAt, now)} ago`
   const toggle = (): void => {
     if (output !== null && output !== 'loading') {
       setOutput(null)
@@ -300,7 +334,7 @@ function JobRow(props: { job: PillJob; sessionId: string; onAction: () => void }
           title: `${job.id} · ${job.label}`,
         }, job.label),
         createElement('div', { style: { color: C.faint, fontSize: 10 } },
-          `${job.id} · ${job.status}${job.detail !== undefined ? ` · ${job.detail}` : ''}`),
+          `${job.id} · ${job.status}${job.detail !== undefined ? ` · ${job.detail}` : ''}${timing}`),
       ),
       createElement('button', {
         onClick: toggle, title: 'Output', 'aria-label': 'Output', style: iconButtonStyleSmall,
@@ -331,7 +365,9 @@ function JobList(props: { state: PillState; onAction: () => void }): JSX.Element
     return createElement('div', { style: { color: C.faint, fontSize: 12, padding: '4px 0' } }, 'No background jobs')
   }
   return createElement('div', null,
-    state.jobs.map((job) => createElement(JobRow, { key: job.id, job, sessionId: state.sessionId, onAction })),
+    state.jobs.map((job) => createElement(JobRow, {
+      key: job.id, job, sessionId: state.sessionId, now: state.ts, onAction,
+    })),
   )
 }
 
@@ -433,19 +469,29 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   // Activity summary driving the capsule.
   const goal = state?.goal ?? null
   const goalActive = goal !== null && (goal.phase === 'active' || goal.phase === 'paused' || goal.phase === 'blocked')
+  const workflow = state?.agent.workflow
+  const workflowRunning = workflow !== undefined && !workflow.settled
   const runningSubagents = state?.subagents.filter(s => s.kind === 'child' && s.activity === 'running').length ?? 0
   const runningJobs = state?.jobs.filter(j => j.status === 'running' || j.status === 'stopping').length ?? 0
+  const failedJobs = state?.jobs.filter(j => j.status === 'failed').length ?? 0
   const agentRunning = state?.agent.status === 'running'
-  const busy = agentRunning || runningSubagents > 0 || runningJobs > 0 || goal?.phase === 'active'
+  const busy = agentRunning || runningSubagents > 0 || runningJobs > 0 || goal?.phase === 'active' || workflowRunning
   const dotColor = state === null ? C.faint
     : goal?.phase === 'blocked' ? C.red
     : busy ? C.yellow
     : C.green
 
-  const counts: Array<{ value: number; color: string; title: string }> = []
-  if (runningSubagents > 0) counts.push({ value: runningSubagents, color: C.purple, title: 'running subagents' })
-  if (runningJobs > 0) counts.push({ value: runningJobs, color: C.blue, title: 'running jobs' })
-  if (goal !== null && goal.phase !== 'complete') counts.push({ value: 1, color: PHASE_META[goal.phase]?.color ?? C.yellow, title: `goal: ${goal.phase}` })
+  const counts: Array<{ value: string; color: string; title: string }> = []
+  if (runningSubagents > 0) counts.push({ value: String(runningSubagents), color: C.purple, title: 'running subagents' })
+  if (runningJobs > 0) counts.push({ value: String(runningJobs), color: C.blue, title: 'running jobs' })
+  if (workflowRunning) counts.push({
+    value: 'wf', color: C.purple,
+    title: `workflow: ${workflow.name}${workflow.phase !== null ? ` · ${workflow.phase}` : ''}`,
+  })
+  if (failedJobs > 0) counts.push({ value: String(failedJobs), color: C.red, title: 'failed jobs' })
+  if (goal !== null && goal.phase !== 'complete') {
+    counts.push({ value: 'G', color: PHASE_META[goal.phase]?.color ?? C.yellow, title: `goal: ${goal.phase}` })
+  }
 
   return createElement('div', null,
     // ── Capsule (draggable; click toggles the drawer) ──
@@ -517,6 +563,12 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
         },
       }),
       createElement('span', { style: { color: C.text, fontSize: 12, fontWeight: 600, letterSpacing: '0.02em' } }, 'AGENT'),
+      goal !== null && goal.phase !== 'complete'
+        ? createElement('span', {
+          style: { color: C.faint, fontSize: 10, fontVariantNumeric: 'tabular-nums' },
+          title: `goal running for ${fmtDur(goal.createdAt, state?.ts ?? Date.now())}`,
+        }, `⏱ ${fmtDur(goal.createdAt, state?.ts ?? Date.now())}`)
+        : null,
       counts.map((count, index) => createElement('span', {
         key: index,
         style: {
@@ -525,7 +577,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
           justifyContent: 'center', padding: '0 5px',
         },
         title: count.title,
-      }, String(count.value))),
+      }, count.value)),
     ),
     // ── Drawer ──
     open
@@ -570,6 +622,13 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                 value: state.agent.status,
                 color: state.agent.status === 'running' ? C.yellow : state.agent.status === 'idle' ? C.green : C.faint,
               }),
+              state.agent.workflow !== undefined
+                ? createElement(Row, {
+                  label: 'workflow',
+                  value: `${state.agent.workflow.name}${state.agent.workflow.phase !== null ? ` · ${state.agent.workflow.phase}` : ''}${state.agent.workflow.settled ? ` · ${state.agent.workflow.stopReason ?? 'ended'}` : ` · ${fmtDur(state.agent.workflow.startedAt, state.ts)}`}`,
+                  color: state.agent.workflow.settled ? C.faint : C.purple,
+                })
+                : null,
               createElement(Section, {
                 title: 'Subagents',
                 count: state.subagents.filter(s => s.kind === 'child').length,
@@ -577,6 +636,22 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
               createElement(SubagentList, { state, onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) } }),
               createElement(Section, { title: 'Jobs', count: state.jobs.length }),
               createElement(JobList, { state, onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) } }),
+              state.services.usage
+                ? createElement('div', null,
+                  createElement(Section, { title: 'Usage' }),
+                  state.usage !== undefined
+                    ? createElement('div', null,
+                      createElement(Row, { label: 'pressure', value: fmtTokens(state.usage.totalTokens), color: C.text }),
+                      createElement(Row, { label: 'surface', value: fmtTokens(state.usage.surfaceTokens), color: C.text }),
+                      createElement(Row, {
+                        label: 'delta',
+                        value: fmtTokens(state.usage.surfaceDeltaTokens),
+                        color: state.usage.surfaceDeltaTokens >= 0 ? C.text : C.green,
+                      }),
+                    )
+                    : createElement('div', { style: { color: C.faint, fontSize: 12, padding: '4px 0' } }, 'unavailable'),
+                )
+                : null,
               !state.services.goals || !state.services.subagents || !state.services.jobs
                 ? createElement('div', {
                   style: { marginTop: 14, color: C.faint, fontSize: 10, lineHeight: 1.5 },
