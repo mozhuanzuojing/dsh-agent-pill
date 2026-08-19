@@ -80,6 +80,18 @@ export interface TrackedWorkflowRun {
   files: string[]
 }
 
+/** Accumulated adapter-reported token accounting for one session. */
+export interface SessionUsage {
+  /** Un-cached input tokens. */
+  input: number
+  /** Output tokens. */
+  output: number
+  /** Cache-read (cache hit) input tokens. */
+  cacheRead: number
+  /** Cache-write input tokens. */
+  cacheWrite: number
+}
+
 /** Process-local activity timeline for the pill panel. */
 export class ActivityTracker {
   /** Bounded history of the most recent workflow runs. */
@@ -194,6 +206,77 @@ export class ActivityTracker {
     const displayPath = str(target, 'displayPath')
     if (displayPath === undefined || run.files.includes(displayPath)) return
     run.files.push(displayPath)
+  }
+
+  // ── Per-session live surface: current tool call, token accounting, inbox ──
+
+  private readonly toolCalls = new Map<string, { name: string; ts: number }>()
+  private readonly usage = new Map<string, SessionUsage>()
+  private readonly inboxCounts = new Map<string, number>()
+
+  /**
+   * Observe one `session/event` append: track the latest `tool-call` block
+   * (per session) and accumulate the step `usage` accounting (per session)
+   * whenever the message event carries one. Defensive reads throughout.
+   */
+  onSessionEvent(sessionId: string, event: unknown): void {
+    if (typeof event !== 'object' || event === null) return
+    const record = event as Record<string, unknown>
+    if (record.type !== 'message') return
+    const data = typeof record.data === 'object' && record.data !== null ? record.data as Record<string, unknown> : null
+    if (data === null) return
+
+    // Latest tool call: walk the content blocks for a tool-call block.
+    const content = data.content
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (typeof block !== 'object' || block === null) continue
+        const b = block as Record<string, unknown>
+        if (b.type !== 'tool-call') continue
+        const name = typeof b.name === 'string' && b.name !== '' ? b.name : undefined
+        if (name !== undefined) this.toolCalls.set(sessionId, { name, ts: Date.now() })
+      }
+    }
+
+    // Step usage accounting (adapter-reported when available).
+    const usage = data.usage
+    if (typeof usage === 'object' && usage !== null) {
+      const u = usage as Record<string, unknown>
+      const current = this.usage.get(sessionId) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+      const add = (key: string): void => {
+        const value = u[key]
+        if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+          current[key as 'input'] += value
+        }
+      }
+      add('input')
+      add('output')
+      add('cacheRead')
+      add('cacheWrite')
+      this.usage.set(sessionId, current)
+    }
+  }
+
+  /** Observe one `agent/inbox/*` event: keep a per-session queued-message count. */
+  onInboxEvent(sessionId: string | undefined, kind: 'inserted' | 'claimed' | 'discarded'): void {
+    if (sessionId === undefined) return
+    const next = (this.inboxCounts.get(sessionId) ?? 0) + (kind === 'inserted' ? 1 : -1)
+    this.inboxCounts.set(sessionId, Math.max(0, next))
+  }
+
+  /** The latest observed tool-call name for one session (undefined when none). */
+  toolCallOf(sessionId: string): string | undefined {
+    return this.toolCalls.get(sessionId)?.name
+  }
+
+  /** Accumulated adapter-reported token usage for one session. */
+  usageOf(sessionId: string): SessionUsage {
+    return { ...(this.usage.get(sessionId) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }) }
+  }
+
+  /** Queued (inbox) message count for one session. */
+  inboxCountOf(sessionId: string): number {
+    return this.inboxCounts.get(sessionId) ?? 0
   }
 
   /** The workflow run history (most recent first, deep-copied). */

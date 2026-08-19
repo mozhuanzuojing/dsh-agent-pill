@@ -65,6 +65,10 @@ declare module '@deepseek-ai/cordis' {
     // or negative observations after file operations. Attributed to the
     // active workflow run at run level (the feed carries no session id).
     'fs/observed'(target: unknown, observation: unknown, actor: unknown): void
+    // Agent inbox events (@deepseek-ai/dsh-agent): queued-message accounting.
+    'agent/inbox/inserted'(payload: unknown): void
+    'agent/inbox/claimed'(payload: unknown): void
+    'agent/inbox/discarded'(payload: unknown): void
   }
 }
 
@@ -328,7 +332,20 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
     const sessionId = (session as { id?: unknown } | null)?.id
     if (typeof sessionId !== 'string') return
     goalTracker.onSessionEvent(sessionId, event)
-  }), 'dsh-agent-pill: goal/change feed')
+    tracker.onSessionEvent(sessionId, event)
+  }), 'dsh-agent-pill: session/event feed')
+  ctx.effect(() => ctx.on('agent/inbox/inserted', (payload) => {
+    const id = (payload as { agent?: { session?: { id?: unknown } } } | null)?.agent?.session?.id
+    tracker.onInboxEvent(typeof id === 'string' ? id : undefined, 'inserted')
+  }), 'dsh-agent-pill: inbox inserted feed')
+  ctx.effect(() => ctx.on('agent/inbox/claimed', (payload) => {
+    const id = (payload as { agent?: { session?: { id?: unknown } } } | null)?.agent?.session?.id
+    tracker.onInboxEvent(typeof id === 'string' ? id : undefined, 'claimed')
+  }), 'dsh-agent-pill: inbox claimed feed')
+  ctx.effect(() => ctx.on('agent/inbox/discarded', (payload) => {
+    const id = (payload as { agent?: { session?: { id?: unknown } } } | null)?.agent?.session?.id
+    tracker.onInboxEvent(typeof id === 'string' ? id : undefined, 'discarded')
+  }), 'dsh-agent-pill: inbox discarded feed')
   ctx.effect(() => ctx.on('subagent/start', (info) => {
     tracker.onSubagentStart(info)
     const id = (info as { id?: unknown } | null)?.id
@@ -391,12 +408,27 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
       const subagents = await refreshSubagents(sessionId)
       const workflows = tracker.workflowHistory()
       const usage = usageOf(sessionId)
+      const consumed = tracker.usageOf(sessionId)
+      const hasConsumed = consumed.input > 0 || consumed.output > 0 || consumed.cacheRead > 0 || consumed.cacheWrite > 0
+      const tool = tracker.toolCallOf(sessionId)
+      const inbox = tracker.inboxCountOf(sessionId)
+      // Global agent fleet (tasklight / tmux-agent-sidebar style overview):
+      // every live agent with its status and goal objective snippet.
+      const fleet = agents !== undefined
+        ? agents.list().map((entry) => ({
+          id: (entry as { id?: unknown }).id,
+          status: (entry as { status?: unknown }).status,
+          goal: goals !== undefined ? goals.get(entry)?.objective.slice(0, 60) : undefined,
+        })).filter((entry) => typeof entry.id === 'string')
+        : []
       return {
         sessionId,
         ts: Date.now(),
         goal: goalViewOf(sessionId),
         agent: {
           status: agent?.status ?? 'absent',
+          ...(tool !== undefined ? { tool } : {}),
+          ...(inbox > 0 ? { inbox } : {}),
           ...(workflows.length > 0 ? { workflows } : {}),
         },
         subagents,
@@ -410,6 +442,8 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
           finishedAt: job.finishedAt,
         })),
         ...(usage !== null ? { usage } : {}),
+        ...(hasConsumed ? { consumed } : {}),
+        ...(fleet.length > 0 ? { agents: fleet } : {}),
         services: {
           goals: goals !== undefined,
           subagents: subagents !== undefined,
