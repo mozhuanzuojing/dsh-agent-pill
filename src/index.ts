@@ -58,7 +58,13 @@ declare module '@deepseek-ai/cordis' {
     // unknown because this package does not carry the workflow package.
     'workflow/start'(info: unknown): void
     'workflow/phase'(info: unknown, title: unknown): void
+    'workflow/agent-start'(info: unknown, agent: unknown): void
+    'workflow/agent-end'(info: unknown, agent: unknown): void
     'workflow/end'(info: unknown, result: unknown): void
+    // The fs observation feed (@deepseek-ai/dsh-fs): authoritative positive
+    // or negative observations after file operations. Attributed to the
+    // active workflow run at run level (the feed carries no session id).
+    'fs/observed'(target: unknown, observation: unknown, actor: unknown): void
   }
 }
 
@@ -103,16 +109,6 @@ interface SubagentWireView {
   /** Process-local observation: the terminal stop reason. */
   stopReason?: string
   reason?: 'corrupt' | 'unsupported' | 'unavailable'
-}
-
-/** Wire view of the most recent workflow run (global, host process). */
-interface WorkflowWireView {
-  id: string
-  name: string
-  phase: string | null
-  startedAt: number
-  settled: boolean
-  stopReason?: string
 }
 
 /**
@@ -349,9 +345,18 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
   ctx.effect(() => ctx.on('workflow/phase', (info, title) => {
     tracker.onWorkflowPhase(info, title)
   }), 'dsh-agent-pill: workflow/phase feed')
+  ctx.effect(() => ctx.on('workflow/agent-start', (info, agent) => {
+    tracker.onWorkflowAgentStart(info, agent)
+  }), 'dsh-agent-pill: workflow/agent-start feed')
+  ctx.effect(() => ctx.on('workflow/agent-end', (info, agent) => {
+    tracker.onWorkflowAgentEnd(info, agent)
+  }), 'dsh-agent-pill: workflow/agent-end feed')
   ctx.effect(() => ctx.on('workflow/end', (info, result) => {
     tracker.onWorkflowEnd(info, result)
   }), 'dsh-agent-pill: workflow/end feed')
+  ctx.effect(() => ctx.on('fs/observed', (target, observation, actor) => {
+    tracker.onFsObserved(target)
+  }), 'dsh-agent-pill: fs/observed feed')
   if (jobs !== undefined) {
     ctx.effect(() => jobs.onJobsChanged(() => { jobsDirty = true }), 'dsh-agent-pill: jobs change feed')
   }
@@ -384,7 +389,7 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
       const sessionId = requireString(payload, 'sessionId')
       const agent = agents?.get(SessionId(sessionId))
       const subagents = await refreshSubagents(sessionId)
-      const workflow = tracker.workflowView()
+      const workflows = tracker.workflowHistory()
       const usage = usageOf(sessionId)
       return {
         sessionId,
@@ -392,7 +397,7 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
         goal: goalViewOf(sessionId),
         agent: {
           status: agent?.status ?? 'absent',
-          ...(workflow !== null ? { workflow } : {}),
+          ...(workflows.length > 0 ? { workflows } : {}),
         },
         subagents,
         jobs: listJobs(sessionId).map((job) => ({
