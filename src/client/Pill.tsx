@@ -348,7 +348,9 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   const [dragging, setDragging] = useState(false)
   const posRef = useRef(pos)
   const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number; moved: boolean } | null>(null)
-  const movedRef = useRef(false)
+  // One-shot suppression of the click that follows a drag end (a drag must
+  // not toggle the drawer); consumed by onClick, never left dangling.
+  const suppressClickRef = useRef(false)
 
   // Subscribe to the session list feed (current session id).
   const snapshot = useSyncExternalStore(
@@ -407,6 +409,27 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
     setOpen(false)
   }, [sessionId])
 
+  // Keep a dragged seat inside the viewport after window resizes.
+  useEffect(() => {
+    const onResize = (): void => {
+      const current = posRef.current
+      if (current === null) return
+      const host = document.querySelector<HTMLElement>('[data-dsh-agent-pill] button')
+      if (host === null) return
+      const clamped = {
+        x: Math.min(current.x, Math.max(0, window.innerWidth - host.offsetWidth)),
+        y: Math.min(current.y, Math.max(0, window.innerHeight - host.offsetHeight)),
+      }
+      if (clamped.x !== current.x || clamped.y !== current.y) {
+        posRef.current = clamped
+        setPos(clamped)
+        try { window.localStorage.setItem(POS_KEY, JSON.stringify(clamped)) } catch { /* private mode */ }
+      }
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
   // Activity summary driving the capsule.
   const goal = state?.goal ?? null
   const goalActive = goal !== null && (goal.phase === 'active' || goal.phase === 'paused' || goal.phase === 'blocked')
@@ -428,9 +451,9 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
     // ── Capsule (draggable; click toggles the drawer) ──
     createElement('button', {
       onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
-        // A drag that ended on this element must not toggle the drawer.
-        if (movedRef.current) {
-          movedRef.current = false
+        // The click immediately following a drag end must not toggle.
+        if (suppressClickRef.current) {
+          suppressClickRef.current = false
           event.preventDefault()
           return
         }
@@ -452,7 +475,6 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
         const dy = event.clientY - drag.startY
         if (!drag.moved && Math.hypot(dx, dy) < 4) return // click slop
         drag.moved = true
-        movedRef.current = true
         if (!dragging) setDragging(true)
         const el = event.currentTarget
         const next = {
@@ -467,8 +489,10 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
         if (drag === null) return
         try { event.currentTarget.releasePointerCapture(event.pointerId) } catch { /* already released */ }
         if (drag.moved) {
-          // Persist the dragged seat so a reload keeps it.
+          // Persist the dragged seat so a reload keeps it, and suppress the
+          // click that follows the drag end.
           try { window.localStorage.setItem(POS_KEY, JSON.stringify(posRef.current)) } catch { /* private mode */ }
+          suppressClickRef.current = true
         }
         dragRef.current = null
         setDragging(false)
