@@ -1,0 +1,14 @@
+# Build output (tsc + tsdown); npm publish reads lib/ from a local build
+lib/
+
+# Dependencies
+node_modules/
+
+# Local-only ops scripts (machine-specific paths, not for distribution)
+restart-web.ps1
+
+# Logs / env / OS noise
+*.log
+.env
+.DS_Store
+Thumbs.db
