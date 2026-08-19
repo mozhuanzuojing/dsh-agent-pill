@@ -416,10 +416,10 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
       // every live agent with its status and goal objective snippet.
       const fleet = agents !== undefined
         ? agents.list().map((entry) => ({
-          id: (entry as { id?: unknown }).id,
-          status: (entry as { status?: unknown }).status,
+          id: entry.id,
+          status: entry.status,
           goal: goals !== undefined ? goals.get(entry)?.objective.slice(0, 60) : undefined,
-        })).filter((entry) => typeof entry.id === 'string')
+        }))
         : []
       return {
         sessionId,
@@ -427,8 +427,8 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
         goal: goalViewOf(sessionId),
         agent: {
           status: agent?.status ?? 'absent',
-          ...(tool !== undefined ? { tool } : {}),
-          ...(inbox > 0 ? { inbox } : {}),
+          ...(agent !== undefined && tool !== undefined ? { tool } : {}),
+          ...(agent !== undefined && inbox > 0 ? { inbox } : {}),
           ...(workflows.length > 0 ? { workflows } : {}),
         },
         subagents,

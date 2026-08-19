@@ -575,30 +575,36 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
 
   // Desktop notifications on settlement transitions (tmux-agent-sidebar
   // style): workflow ended, job failed, goal completed. Each id fires once.
-  const notifiedRef = useRef<Set<string>>(new Set())
+  // The FIRST snapshot only registers existing settled ids — nothing notifies
+  // on load (a browser refresh must not replay old events).
+  const notifiedRef = useRef<Set<string> | null>(null)
   useEffect(() => {
     if (state === null) return
+    const fire = (key: string, title: string, body: string): void => {
+      if (notifiedRef.current === null) {
+        // First snapshot: register only, never notify.
+        return
+      }
+      if (notifiedRef.current.has(key)) return
+      notifiedRef.current.add(key)
+      notify(title, body)
+    }
     for (const run of state.agent.workflows ?? []) {
-      const key = `wf:${run.id}`
-      if (run.settled && !notifiedRef.current.has(key)) {
-        notifiedRef.current.add(key)
-        notify(
+      if (run.settled) {
+        fire(
+          `wf:${run.id}`,
           run.stopReason === 'completed' ? 'Workflow completed' : `Workflow finished (${run.stopReason ?? 'ended'})`,
           run.name,
         )
       }
     }
     for (const job of state.jobs) {
-      const key = `job:${job.id}`
-      if (job.status === 'failed' && !notifiedRef.current.has(key)) {
-        notifiedRef.current.add(key)
-        notify('Background job failed', job.label)
-      }
+      if (job.status === 'failed') fire(`job:${job.id}`, 'Background job failed', job.label)
     }
-    if (state.goal?.phase === 'complete' && !notifiedRef.current.has(`goal:${state.goal.id}`)) {
-      notifiedRef.current.add(`goal:${state.goal.id}`)
-      notify('Goal completed', state.goal.objective.slice(0, 80))
+    if (state.goal?.phase === 'complete') {
+      fire(`goal:${state.goal.id}`, 'Goal completed', state.goal.objective.slice(0, 80))
     }
+    if (notifiedRef.current === null) notifiedRef.current = new Set()
   }, [state])
 
   // Ctrl+Alt+P toggles the popover; Esc closes it.

@@ -215,38 +215,32 @@ export class ActivityTracker {
   private readonly inboxCounts = new Map<string, number>()
 
   /**
-   * Observe one `session/event` append: track the latest `tool-call` block
-   * (per session) and accumulate the step `usage` accounting (per session)
-   * whenever the message event carries one. Defensive reads throughout.
+   * Observe one `session/event` append: track the latest tool call (the
+   * `tool/call` event carries the tool `name` directly) and accumulate the
+   * step `usage` accounting (the `assistant/message` event carries the
+   * step's `usage` when the adapter reported it). Defensive reads throughout.
    */
   onSessionEvent(sessionId: string, event: unknown): void {
     if (typeof event !== 'object' || event === null) return
     const record = event as Record<string, unknown>
-    if (record.type !== 'message') return
     const data = typeof record.data === 'object' && record.data !== null ? record.data as Record<string, unknown> : null
     if (data === null) return
 
-    // Latest tool call: walk the content blocks for a tool-call block.
-    const content = data.content
-    if (Array.isArray(content)) {
-      for (const block of content) {
-        if (typeof block !== 'object' || block === null) continue
-        const b = block as Record<string, unknown>
-        if (b.type !== 'tool-call') continue
-        const name = typeof b.name === 'string' && b.name !== '' ? b.name : undefined
-        if (name !== undefined) this.toolCalls.set(sessionId, { name, ts: Date.now() })
-      }
+    if (record.type === 'tool/call') {
+      const name = typeof data.name === 'string' && data.name !== '' ? data.name : undefined
+      if (name !== undefined) this.toolCalls.set(sessionId, { name, ts: Date.now() })
+      return
     }
 
-    // Step usage accounting (adapter-reported when available).
-    const usage = data.usage
-    if (typeof usage === 'object' && usage !== null) {
+    if (record.type === 'assistant/message') {
+      const usage = data.usage
+      if (typeof usage !== 'object' || usage === null) return
       const u = usage as Record<string, unknown>
       const current = this.usage.get(sessionId) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
-      const add = (key: string): void => {
+      const add = (key: 'input' | 'output' | 'cacheRead' | 'cacheWrite'): void => {
         const value = u[key]
         if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
-          current[key as 'input'] += value
+          current[key] += value
         }
       }
       add('input')
