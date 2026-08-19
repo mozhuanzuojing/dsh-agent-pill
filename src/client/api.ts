@@ -73,6 +73,8 @@ export interface PillUsage {
   totalTokens: number
   surfaceTokens: number
   surfaceDeltaTokens: number
+  /** Real model context window when resolvable (fallback: assumed). */
+  contextWindow?: number
 }
 
 /** Wire view of the live agent for the session. */
@@ -80,6 +82,10 @@ export interface PillAgent {
   status: 'idle' | 'running' | 'absent'
   /** Latest observed tool-call name (from the session event feed). */
   tool?: string
+  /** Host clock when the current tool started. */
+  toolSince?: number
+  /** Recently completed tools (newest first, bounded to 5). */
+  recentTools?: Array<{ name: string; durationMs: number }>
   /** Queued (inbox) message count. */
   inbox?: number
   workflows?: PillWorkflowRun[]

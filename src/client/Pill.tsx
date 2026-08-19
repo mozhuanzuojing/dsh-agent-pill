@@ -438,8 +438,8 @@ function JobList(props: { state: PillState; onAction: () => void }): JSX.Element
 
 /* ── Workflow history: runs with steps and observed files ──────────────── */
 
-function WorkflowRow(props: { run: PillWorkflowRun; ts: number }): JSX.Element {
-  const { run, ts } = props
+function WorkflowRow(props: { run: PillWorkflowRun; ts: number; subagents: PillSubagent[] }): JSX.Element {
+  const { run, ts, subagents } = props
   const [expanded, setExpanded] = useState(false)
   const statusColor = run.settled
     ? run.stopReason === 'completed' ? C.green
@@ -449,6 +449,17 @@ function WorkflowRow(props: { run: PillWorkflowRun; ts: number }): JSX.Element {
   const outcomeColor = (outcome: string | undefined): string =>
     outcome === 'completed' ? C.green : outcome === 'failed' ? C.red : outcome === 'cancelled' ? C.dim : C.faint
   const fileBase = (path: string): string => path.split(/[\\/]/).pop() ?? path
+  // Step ↔ subagent linkage: the step's child session resolves against the
+  // observed subagent rows for duration and terminal color (v0.6.0).
+  const stepMeta = (childId: string | undefined): { detail: string; color: string } => {
+    if (childId === undefined) return { detail: '', color: C.faint }
+    const child = subagents.find(s => s.id === childId)
+    if (child === undefined) return { detail: '', color: C.faint }
+    if (child.startedAt !== undefined && child.finishedAt !== undefined) {
+      return { detail: ` · ${fmtDur(child.startedAt, child.finishedAt)}`, color: child.stopReason === 'failed' ? C.red : C.faint }
+    }
+    return { detail: '', color: C.faint }
+  }
   return createElement('div', { style: { marginBottom: 6 } },
     createElement('div', {
       onClick: () => setExpanded(prev => !prev),
@@ -468,22 +479,28 @@ function WorkflowRow(props: { run: PillWorkflowRun; ts: number }): JSX.Element {
         createElement('div', { style: { color: C.faint, fontSize: 10, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, 'Steps'),
         run.steps.length === 0
           ? createElement('div', { style: { color: C.faint, fontSize: 11, padding: '2px 0' } }, 'no agent calls observed')
-          : run.steps.map((step) => createElement('div', {
-            key: step.seq,
-            style: { display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' },
-          },
-            createElement('span', { style: { color: C.faint, fontSize: 10, minWidth: 22, fontVariantNumeric: 'tabular-nums' } }, `#${step.seq}`),
-            createElement('span', {
-              style: { fontSize: 12, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
-              title: step.childId ?? step.label,
-            }, step.label),
-            step.phase !== undefined
-              ? createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, step.phase)
-              : null,
-            step.outcome !== undefined
-              ? createElement('span', { style: { color: outcomeColor(step.outcome), fontSize: 10, flexShrink: 0 } }, step.outcome)
-              : null,
-          )),
+          : run.steps.map((step) => {
+            const linked = stepMeta(step.childId)
+            return createElement('div', {
+              key: step.seq,
+              style: { display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' },
+            },
+              createElement('span', { style: { color: C.faint, fontSize: 10, minWidth: 22, fontVariantNumeric: 'tabular-nums' } }, `#${step.seq}`),
+              createElement('span', {
+                style: { fontSize: 12, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+                title: step.childId ?? step.label,
+              }, step.label),
+              step.phase !== undefined
+                ? createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, step.phase)
+                : null,
+              linked.detail !== ''
+                ? createElement('span', { style: { color: linked.color, fontSize: 10, flexShrink: 0 } }, linked.detail.trim())
+                : null,
+              step.outcome !== undefined
+                ? createElement('span', { style: { color: outcomeColor(step.outcome), fontSize: 10, flexShrink: 0 } }, step.outcome)
+                : null,
+            )
+          }),
         run.files.length > 0
           ? createElement('div', null,
             createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 6, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, `Files observed (${run.files.length})`),
@@ -505,14 +522,12 @@ function WorkflowRow(props: { run: PillWorkflowRun; ts: number }): JSX.Element {
   )
 }
 
-function WorkflowList(props: { state: PillState }): JSX.Element {
+function WorkflowList(props: { state: PillState }): JSX.Element | null {
   const { state } = props
   const workflows = state.agent.workflows ?? []
-  if (workflows.length === 0) {
-    return createElement('div', { style: { color: C.faint, fontSize: 12, padding: '4px 0' } }, 'No workflow runs')
-  }
+  if (workflows.length === 0) return null
   return createElement('div', null,
-    workflows.map((run) => createElement(WorkflowRow, { key: run.id, run, ts: state.ts })),
+    workflows.map((run) => createElement(WorkflowRow, { key: run.id, run, ts: state.ts, subagents: state.subagents })),
   )
 }
 
@@ -741,6 +756,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   if (inboxCount > 0) counts.push({ value: 'q', color: C.yellow, title: `${inboxCount} queued message${inboxCount > 1 ? 's' : ''}` })
   const toolName = state?.agent.tool
   const fleet = state?.agents ?? []
+  const recentTools = state?.agent.recentTools ?? []
 
   return createElement('div', { ref: rootRef },
     // ── Capsule (draggable; click toggles the popover) ──
@@ -866,98 +882,133 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
             ? createElement('div', { style: { color: C.faint, fontSize: 12, padding: '16px 0' } },
               sessionId === undefined ? 'No active conversation' : 'Loading…')
             : createElement('div', null,
-              createElement(Section, {
-                title: 'Goal', onToggle: () => toggleSection('goal'), collapsed: collapsed.goal === true,
-              }),
-              collapsed.goal === true
-                ? null
-                : createElement(GoalCard, { state, onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) } }),
-              createElement(Section, {
-                title: 'Agent', onToggle: () => toggleSection('agent'), collapsed: collapsed.agent === true,
-              }),
-              collapsed.agent === true
-                ? null
-                : createElement('div', null,
-                  createElement(Row, {
-                    label: 'status',
-                    value: state.agent.status,
-                    color: state.agent.status === 'running' ? C.yellow : state.agent.status === 'idle' ? C.green : C.faint,
+              // ── Empty-state hiding (v0.6.0): a section renders only when it
+              // has real content; the header above always stays. ──
+              state.goal !== null
+                ? createElement('div', null,
+                  createElement(Section, {
+                    title: 'Goal', onToggle: () => toggleSection('goal'), collapsed: collapsed.goal === true,
                   }),
-                  state.agent.tool !== undefined
-                    ? createElement(Row, { label: 'tool', value: state.agent.tool, color: C.purple })
-                    : null,
-                  state.agent.inbox !== undefined && state.agent.inbox > 0
-                    ? createElement(Row, {
-                      label: 'queued',
-                      value: `${state.agent.inbox} message${state.agent.inbox > 1 ? 's' : ''} waiting`,
-                      color: C.yellow,
-                    })
-                    : null,
-                  createElement(WorkflowList, { state }),
-                ),
-              createElement(Section, {
-                title: 'Subagents',
-                count: state.subagents.filter(s => s.kind === 'child').length,
-                onToggle: () => toggleSection('subagents'), collapsed: collapsed.subagents === true,
-              }),
-              collapsed.subagents === true
-                ? null
-                : createElement(SubagentList, { state, onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) } }),
-              createElement(Section, {
-                title: 'Jobs', count: state.jobs.length,
-                onToggle: () => toggleSection('jobs'), collapsed: collapsed.jobs === true,
-              }),
-              collapsed.jobs === true
-                ? null
-                : createElement(JobList, { state, onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) } }),
-              state.services.usage
+                  collapsed.goal === true
+                    ? null
+                    : createElement(GoalCard, { state, onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) } }),
+                )
+                : null,
+              state.agent.status !== 'absent' || state.agent.tool !== undefined || (state.agent.inbox ?? 0) > 0 || (state.agent.workflows ?? []).length > 0
+                ? createElement('div', null,
+                  createElement(Section, {
+                    title: 'Agent', onToggle: () => toggleSection('agent'), collapsed: collapsed.agent === true,
+                  }),
+                  collapsed.agent === true
+                    ? null
+                    : createElement('div', null,
+                      createElement(Row, {
+                        label: 'status',
+                        value: state.agent.status,
+                        color: state.agent.status === 'running' ? C.yellow : state.agent.status === 'idle' ? C.green : C.faint,
+                      }),
+                      state.agent.tool !== undefined
+                        ? createElement(Row, {
+                          label: 'tool',
+                          value: `${state.agent.tool}${state.agent.toolSince !== undefined ? ` · ${fmtDur(state.agent.toolSince, state.ts)}` : ''}`,
+                          color: C.purple,
+                        })
+                        : null,
+                      recentTools.length > 0
+                        ? createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 4, padding: '2px 0 4px' } },
+                          recentTools.map((t, index) => createElement('span', {
+                            key: `${t.name}-${index}`,
+                            style: {
+                              fontSize: 10, color: C.dim, background: C.bg, border: `1px solid ${C.border}`,
+                              borderRadius: 4, padding: '1px 6px', maxWidth: 200,
+                              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                            },
+                            title: `${t.name} · ${fmtDur(Date.now() - t.durationMs, Date.now())}`,
+                          }, `${t.name} · ${fmtDur(Date.now() - t.durationMs, Date.now())}`)),
+                        )
+                        : null,
+                      state.agent.inbox !== undefined && state.agent.inbox > 0
+                        ? createElement(Row, {
+                          label: 'queued',
+                          value: `${state.agent.inbox} message${state.agent.inbox > 1 ? 's' : ''} waiting`,
+                          color: C.yellow,
+                        })
+                        : null,
+                      createElement(WorkflowList, { state }),
+                    ),
+                )
+                : null,
+              state.subagents.filter(s => s.kind === 'child').length > 0 || state.subagents.some(s => s.kind === 'diagnostic')
+                ? createElement('div', null,
+                  createElement(Section, {
+                    title: 'Subagents',
+                    count: state.subagents.filter(s => s.kind === 'child').length,
+                    onToggle: () => toggleSection('subagents'), collapsed: collapsed.subagents === true,
+                  }),
+                  collapsed.subagents === true
+                    ? null
+                    : createElement(SubagentList, { state, onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) } }),
+                )
+                : null,
+              state.jobs.length > 0
+                ? createElement('div', null,
+                  createElement(Section, {
+                    title: 'Jobs', count: state.jobs.length,
+                    onToggle: () => toggleSection('jobs'), collapsed: collapsed.jobs === true,
+                  }),
+                  collapsed.jobs === true
+                    ? null
+                    : createElement(JobList, { state, onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) } }),
+                )
+                : null,
+              state.services.usage && state.usage !== undefined
                 ? createElement('div', null,
                   createElement(Section, {
                     title: 'Usage', onToggle: () => toggleSection('usage'), collapsed: collapsed.usage === true,
                   }),
                   collapsed.usage === true
                     ? null
-                    : state.usage !== undefined
-                      ? createElement('div', null,
-                        // Context pressure bar (claude-statusline style):
-                        // threshold colors, rainbow at very high usage.
-                        (() => {
-                          const ratio = Math.min(1, state.usage.totalTokens / EST_CONTEXT_WINDOW)
-                          const barColor = ratio > 0.95
-                            ? 'linear-gradient(90deg,#e05a5a,#d9a13b,#3fb96a,#5a9cf0,#a37de8,#e05a5a)'
-                            : ratio > 0.85 ? C.red
-                            : ratio > 0.6 ? C.yellow
-                            : C.green
-                          return createElement('div', {
-                            style: { margin: '4px 0 6px', height: 6, borderRadius: 3, background: C.bg, overflow: 'hidden' },
-                            title: `${Math.round(ratio * 100)}% of ~${fmtTokens(EST_CONTEXT_WINDOW)} context window`,
-                          },
-                            createElement('div', {
-                              style: {
-                                height: '100%', width: `${Math.round(ratio * 100)}%`,
-                                background: barColor, borderRadius: 3,
-                              },
-                            }),
-                          )
-                        })(),
-                        createElement(Row, { label: 'pressure', value: fmtTokens(state.usage.totalTokens), color: C.text }),
-                        createElement(Row, { label: 'surface', value: fmtTokens(state.usage.surfaceTokens), color: C.text }),
-                        createElement(Row, {
-                          label: 'delta',
-                          value: fmtTokens(state.usage.surfaceDeltaTokens),
-                          color: state.usage.surfaceDeltaTokens >= 0 ? C.text : C.green,
-                        }),
-                        state.consumed !== undefined
-                          ? createElement(Row, {
-                            label: 'cost',
-                            value: `~$${estimateCostUsd(state.consumed).toFixed(2)} · ${fmtTokens(
-                              state.consumed.input + state.consumed.cacheRead + state.consumed.cacheWrite + state.consumed.output,
-                            )} tok${priceMultiplier() > 1 ? ' · peak' : ' · off-peak'}`,
-                            color: priceMultiplier() > 1 ? C.yellow : C.text,
-                          })
-                          : null,
-                      )
-                      : createElement('div', { style: { color: C.faint, fontSize: 12, padding: '4px 0' } }, 'unavailable'),
+                    : createElement('div', null,
+                      // Context pressure bar (claude-statusline style):
+                      // threshold colors, rainbow at very high usage. The
+                      // denominator is the real model window when resolved.
+                      (() => {
+                        const window = state.usage.contextWindow ?? EST_CONTEXT_WINDOW
+                        const ratio = Math.min(1, state.usage.totalTokens / window)
+                        const barColor = ratio > 0.95
+                          ? 'linear-gradient(90deg,#e05a5a,#d9a13b,#3fb96a,#5a9cf0,#a37de8,#e05a5a)'
+                          : ratio > 0.85 ? C.red
+                          : ratio > 0.6 ? C.yellow
+                          : C.green
+                        return createElement('div', {
+                          style: { margin: '4px 0 6px', height: 6, borderRadius: 3, background: C.bg, overflow: 'hidden' },
+                          title: `${Math.round(ratio * 100)}% of ${state.usage.contextWindow !== undefined ? fmtTokens(state.usage.contextWindow) : `~${fmtTokens(EST_CONTEXT_WINDOW)} (assumed)`} context window`,
+                        },
+                          createElement('div', {
+                            style: {
+                              height: '100%', width: `${Math.round(ratio * 100)}%`,
+                              background: barColor, borderRadius: 3,
+                            },
+                          }),
+                        )
+                      })(),
+                      createElement(Row, { label: 'pressure', value: fmtTokens(state.usage.totalTokens), color: C.text }),
+                      createElement(Row, { label: 'surface', value: fmtTokens(state.usage.surfaceTokens), color: C.text }),
+                      createElement(Row, {
+                        label: 'delta',
+                        value: fmtTokens(state.usage.surfaceDeltaTokens),
+                        color: state.usage.surfaceDeltaTokens >= 0 ? C.text : C.green,
+                      }),
+                      state.consumed !== undefined
+                        ? createElement(Row, {
+                          label: 'cost',
+                          value: `~$${estimateCostUsd(state.consumed).toFixed(2)} · ${fmtTokens(
+                            state.consumed.input + state.consumed.cacheRead + state.consumed.cacheWrite + state.consumed.output,
+                          )} tok${priceMultiplier() > 1 ? ' · peak' : ' · off-peak'}`,
+                          color: priceMultiplier() > 1 ? C.yellow : C.text,
+                        })
+                        : null,
+                    ),
                 )
                 : null,
               fleet.length > 0
