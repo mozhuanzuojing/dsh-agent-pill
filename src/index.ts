@@ -29,6 +29,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { isTrustedApiRequest } from './trust-fence.ts'
 import { PillError, readJsonBody, requireString, type PillHttpRequest, type PillHttpResponse, writeError, writeJson, writeOk } from './wire.ts'
 import { createJobOutputReplay } from './jobs-output.ts'
+import { ActivityTracker } from './activity.ts'
 
 // Structural mirrors of the two runtime services that carry no type
 // declaration of their own reachable from this package:
@@ -50,6 +51,14 @@ declare module '@deepseek-ai/cordis' {
         handler: (req: PillHttpRequest, res: PillHttpResponse) => void | Promise<void>
       }): () => void
     }
+  }
+  interface Events {
+    // The workflow engine events (@deepseek-ai/dsh-workflow) are observed
+    // defensively through the ActivityTracker; the payloads are read as
+    // unknown because this package does not carry the workflow package.
+    'workflow/start'(info: unknown): void
+    'workflow/phase'(info: unknown, title: unknown): void
+    'workflow/end'(info: unknown, result: unknown): void
   }
 }
 
@@ -87,7 +96,23 @@ interface SubagentWireView {
   label?: string
   parentId?: string
   depth?: number
+  /** Process-local observation: when the child started (host clock). */
+  startedAt?: number
+  /** Process-local observation: when the child settled (host clock). */
+  finishedAt?: number
+  /** Process-local observation: the terminal stop reason. */
+  stopReason?: string
   reason?: 'corrupt' | 'unsupported' | 'unavailable'
+}
+
+/** Wire view of the most recent workflow run (global, host process). */
+interface WorkflowWireView {
+  id: string
+  name: string
+  phase: string | null
+  startedAt: number
+  settled: boolean
+  stopReason?: string
 }
 
 /**
@@ -150,6 +175,8 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
   const goals = ctx.get('goals')
   const subagents = ctx.get('subagents')
   const jobs = ctx.get('jobs')
+  const tokenMeter = ctx.get('tokenMeter')
+  const tracker = new ActivityTracker()
   const goalTracker = new GoalTracker(ctx.sessions)
   const replay = createJobOutputReplay({
     ...ctx,
@@ -262,6 +289,7 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
         if (row.kind === 'diagnostic') {
           return { kind: 'diagnostic', id: row.id, reason: row.reason, depth: row.depth, parentId: row.parentId }
         }
+        const tracked = tracker.subagentOf(row.id)
         return {
           kind: 'child',
           id: row.id,
@@ -271,6 +299,9 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
           label: row.label,
           parentId: row.parentId,
           depth: row.depth,
+          ...(tracked.startedAt !== undefined ? { startedAt: tracked.startedAt } : {}),
+          ...(tracked.finishedAt !== undefined ? { finishedAt: tracked.finishedAt } : {}),
+          ...(tracked.stopReason !== undefined ? { stopReason: tracked.stopReason } : {}),
         }
       })
     } catch (error) {
@@ -303,13 +334,49 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
     goalTracker.onSessionEvent(sessionId, event)
   }), 'dsh-agent-pill: goal/change feed')
   ctx.effect(() => ctx.on('subagent/start', (info) => {
-    void refreshSubagentsOf(ctx, info.id, refreshSubagents)
+    tracker.onSubagentStart(info)
+    const id = (info as { id?: unknown } | null)?.id
+    if (typeof id === 'string') void refreshSubagentsOf(ctx, id, refreshSubagents)
   }), 'dsh-agent-pill: subagent/start feed')
   ctx.effect(() => ctx.on('subagent/end', (info) => {
-    void refreshSubagentsOf(ctx, info.id, refreshSubagents)
+    tracker.onSubagentEnd(info)
+    const id = (info as { id?: unknown } | null)?.id
+    if (typeof id === 'string') void refreshSubagentsOf(ctx, id, refreshSubagents)
   }), 'dsh-agent-pill: subagent/end feed')
+  ctx.effect(() => ctx.on('workflow/start', (info) => {
+    tracker.onWorkflowStart(info)
+  }), 'dsh-agent-pill: workflow/start feed')
+  ctx.effect(() => ctx.on('workflow/phase', (info, title) => {
+    tracker.onWorkflowPhase(info, title)
+  }), 'dsh-agent-pill: workflow/phase feed')
+  ctx.effect(() => ctx.on('workflow/end', (info, result) => {
+    tracker.onWorkflowEnd(info, result)
+  }), 'dsh-agent-pill: workflow/end feed')
   if (jobs !== undefined) {
     ctx.effect(() => jobs.onJobsChanged(() => { jobsDirty = true }), 'dsh-agent-pill: jobs change feed')
+  }
+
+  // Throttled token-meter snapshot (measurement is O(surface); 10s reuse).
+  let usageAt = 0
+  let usageCache: { totalTokens: number; surfaceTokens: number; surfaceDeltaTokens: number } | null = null
+  const usageOf = (sessionId: string): typeof usageCache => {
+    if (tokenMeter === undefined) return null
+    const now = Date.now()
+    if (now - usageAt < 10_000 && usageCache !== null) return usageCache
+    usageAt = now
+    try {
+      const session = ctx.sessions.get(SessionId(sessionId))
+      if (session === undefined) return null
+      const measured = tokenMeter.measure(session)
+      usageCache = {
+        totalTokens: measured.totalTokens,
+        surfaceTokens: measured.surfaceTokens,
+        surfaceDeltaTokens: measured.surfaceDeltaTokens,
+      }
+    } catch {
+      usageCache = null
+    }
+    return usageCache
   }
 
   return {
@@ -317,11 +384,16 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
       const sessionId = requireString(payload, 'sessionId')
       const agent = agents?.get(SessionId(sessionId))
       const subagents = await refreshSubagents(sessionId)
+      const workflow = tracker.workflowView()
+      const usage = usageOf(sessionId)
       return {
         sessionId,
         ts: Date.now(),
         goal: goalViewOf(sessionId),
-        agent: { status: agent?.status ?? 'absent' },
+        agent: {
+          status: agent?.status ?? 'absent',
+          ...(workflow !== null ? { workflow } : {}),
+        },
         subagents,
         jobs: listJobs(sessionId).map((job) => ({
           id: job.id,
@@ -332,11 +404,13 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
           startedAt: job.startedAt,
           finishedAt: job.finishedAt,
         })),
+        ...(usage !== null ? { usage } : {}),
         services: {
           goals: goals !== undefined,
           subagents: subagents !== undefined,
           jobs: jobs !== undefined,
           agents: agents !== undefined,
+          usage: tokenMeter !== undefined,
         },
       }
     },
