@@ -23,6 +23,10 @@ DSH (DeepSeek Harness) web plugin: a ZCode-style agent activity pill (top-right 
 - **Queued message badge (v0.5.0)**: `agent/inbox` events keep a per-session queued-message count; the capsule shows a `q` badge and the Agent section a queued row (Cursor's queued-messages idea).
 - **Completion notifications (v0.5.0)**: browser notifications fire once per event when a workflow settles, a background job fails, or a goal completes (permission requested lazily).
 - **Sessions overview (v0.5.0)**: the panel lists every live agent on the host (`ctx.agents.list()`) with a status dot and goal snippet — a fleet view in the style of tasklight / tmux-agent-sidebar.
+- **Tool durations (v0.6.0)**: the current tool row shows how long it has been running (`pwsh · 12s`, from `tool/call` / `tool/result` pairing — DSH executes tools serially, so a single in-flight slot pairs them), and recently completed tools appear as duration chips under the Agent section.
+- **Real context window (v0.6.0)**: the pressure bar uses the resolved model context window (`llm.resolveModelInfo` on the current default model selection, 60s cache) when available, falling back to the assumed ~200k.
+- **Step ↔ subagent linkage (v0.6.0)**: workflow step rows resolve their `childId` against the observed subagent rows and show the child's run duration and terminal color.
+- **Empty-state hiding (v0.6.0)**: a section renders only when it has real content — Goal without a goal, Subagents without children, Jobs without entries, Usage when unavailable, Sessions without agents, and an Agent section with nothing to say are all hidden entirely.
 
 ## Install
 
