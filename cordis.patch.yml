@@ -1,0 +1,9 @@
+# dsh-agent-pill bundle patch
+#
+# This file is the `dsh.bundle.patch` layer of the package: when the plugin
+# is mounted through the profile's cordis.patch.yml (junction into
+# ./plugins/dsh-agent-pill) the Loader inserts the host-half row into the
+# web profile composition. The `id` must be unique across the composition.
+- insert:
+    - id: agent-pill
+      name: 'dsh-agent-pill'
