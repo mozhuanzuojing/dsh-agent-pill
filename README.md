@@ -18,6 +18,11 @@ DSH (DeepSeek Harness) web plugin: a ZCode-style agent activity pill (top-right 
 - **Jobs as step entries (v0.4.0)**: each background job is rendered as a single step entry (status, output summary, timing) — jobs have no structured steps, so no file extraction is attempted.
 - **Subagent tree (v0.3.0)**: descendants are indented by depth, and each row shows its **run duration** and **terminal stop reason** (failed settles render red) — timestamps come from the host's `subagent/start` / `subagent/end` observation, since the durable listing carries none.
 - **Usage section (v0.3.0)**: when the host mounts `tokenMeter`, the panel shows the session's current token pressure, surface, and signed surface delta (measured at most every 10s).
+- **Context pressure bar (v0.5.0)**: the Usage section leads with a progress bar of the current context pressure (threshold colors: green <60%, yellow <85%, red <95%, rainbow beyond; the window is assumed ~200k tokens when unknown), plus a **cost estimate** row — accumulated adapter-reported token accounting (`input` / `output` / `cacheRead` / `cacheWrite` from message-step `usage`) priced with DeepSeek's official list prices and the Beijing-time peak/off-peak multiplier.
+- **Live tool call (v0.5.0)**: the current session's latest `tool-call` block name is shown under Agent and in the capsule tooltip while running (from the session event feed).
+- **Queued message badge (v0.5.0)**: `agent/inbox` events keep a per-session queued-message count; the capsule shows a `q` badge and the Agent section a queued row (Cursor's queued-messages idea).
+- **Completion notifications (v0.5.0)**: browser notifications fire once per event when a workflow settles, a background job fails, or a goal completes (permission requested lazily).
+- **Sessions overview (v0.5.0)**: the panel lists every live agent on the host (`ctx.agents.list()`) with a status dot and goal snippet — a fleet view in the style of tasklight / tmux-agent-sidebar.
 
 ## Install
 
@@ -32,10 +37,11 @@ dsh plugin --profile web add dsh-agent-pill
 |---------|-------------|---------------|
 | Goal | `goal/change` session-event projection replay + live append feed (last-wins fold) | `goal.pause` / `goal.resume` / `goal.complete` / `goal.clear` (CAS `{id, revision}`, requires a live agent) |
 | Subagents | `ctx.subagents.listDescendants` (durable tree, live-preferred) + process-local `subagent/start` / `subagent/end` timestamps | `subagent.interrupt` (human-parent authority; cancels a continuable child's current turn) |
-| Agent | `ctx.agents.get(id)?.status` + `agent/status` events (`idle` / `running`) | read-only |
+| Agent | `ctx.agents.get(id)?.status` + `agent/status` events (`idle` / `running`); live `tool-call` block from the session event feed; `agent/inbox` queued-message count | read-only |
 | Workflow | `workflow/start` / `workflow/phase` / `workflow/agent-start` / `workflow/agent-end` / `workflow/end` events (bounded history of 5 runs, each with steps); files from the global `fs/observed` feed while a run is active | read-only |
 | Jobs | `ctx.jobs.list(caller)` + `onJobsChanged` invalidation (single step entry per job) | `jobs.kill` (registry stock API); `jobs.output` (event replay, never consumes the model's cursor) |
-| Usage | `ctx.tokenMeter.measure(session)` (throttled to 10s) | read-only |
+| Usage | `ctx.tokenMeter.measure(session)` (throttled to 10s) + accumulated message-step `usage` accounting (input / output / cache) with DeepSeek price estimate | read-only |
+| Sessions | `ctx.agents.list()` (global fleet: id, status, goal snippet) | read-only |
 
 ## API routes
 
