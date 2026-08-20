@@ -880,14 +880,9 @@ function PillRoot(): JSX.Element {
     setLayerAnim('back')
     setLayers(prev => prev.slice(0, -1))
   }
-  const clearLayers = (): void => {
-    setLayerAnim('back')
-    setLayers([])
-  }
   // Animation direction for layer transitions (enter pushes from the right,
   // back slides from the left).
   const [layerAnim, setLayerAnim] = useState<'in' | 'back'>('in')
-  const inFlight = useRef(false)
 
   // ── Capsule drag ──
   const [pos, setPos] = useState<{ x: number; y: number } | null>(loadCapsulePos)
@@ -906,19 +901,20 @@ function PillRoot(): JSX.Element {
 
   // Desktop notifications on settlement transitions (tmux-agent-sidebar
   // style): workflow ended, job failed, goal completed. Each id fires once.
-  // The FIRST snapshot only registers existing settled ids — nothing notifies
-  // on load (a browser refresh must not replay old events).
+  // The FIRST snapshot only REGISTERS existing settled ids — nothing notifies
+  // on load (a browser refresh must not replay old events). The Set must be
+  // created before the scan so first-snapshot ids are recorded; only later
+  // snapshots that see a settled id for the first time fire a notification.
   const notifiedRef = useRef<Set<string> | null>(null)
   useEffect(() => {
     if (state === null) return
+    const first = notifiedRef.current === null
+    if (first) notifiedRef.current = new Set()
+    const seen = notifiedRef.current!
     const fire = (key: string, title: string, body: string): void => {
-      if (notifiedRef.current === null) {
-        // First snapshot: register only, never notify.
-        return
-      }
-      if (notifiedRef.current.has(key)) return
-      notifiedRef.current.add(key)
-      notify(title, body)
+      if (seen.has(key)) return
+      seen.add(key)
+      if (!first) notify(title, body)
     }
     for (const run of state.agent.workflows ?? []) {
       if (run.settled) {
@@ -935,7 +931,6 @@ function PillRoot(): JSX.Element {
     if (state.goal?.phase === 'complete') {
       fire(`goal:${state.goal.id}`, 'Goal completed', state.goal.objective.slice(0, 80))
     }
-    if (notifiedRef.current === null) notifiedRef.current = new Set()
   }, [state])
 
   // Click outside the capsule+console closes the console (no overlay).
@@ -950,12 +945,6 @@ function PillRoot(): JSX.Element {
     document.addEventListener('pointerdown', onPointerDown, true)
     return () => document.removeEventListener('pointerdown', onPointerDown, true)
   }, [consoleOpen])
-
-  // Close the console and drop every layer when switching sessions.
-  useEffect(() => {
-    pillStore.setConsoleOpen(false)
-    setLayers([])
-  }, [sessionId])
 
   // Popover geometry: anchored to the capsule, flipped to stay in viewport.
   const capsuleRef = useRef<HTMLButtonElement>(null)
@@ -1028,7 +1017,6 @@ function PillRoot(): JSX.Element {
 
   // Activity summary driving the capsule.
   const goal = state?.goal ?? null
-  const goalActive = goal !== null && (goal.phase === 'active' || goal.phase === 'paused' || goal.phase === 'blocked')
   const workflows = state?.agent.workflows ?? []
   const runningWorkflow = workflows.find(run => !run.settled)
   const workflowRunning = runningWorkflow !== undefined
@@ -1058,10 +1046,24 @@ function PillRoot(): JSX.Element {
   const runningJobs = state?.jobs.filter(j => j.status === 'running' || j.status === 'stopping').length ?? 0
   const failedJobs = state?.jobs.filter(j => j.status === 'failed').length ?? 0
   const agentRunning = state?.agent.status === 'running'
-  const busy = agentRunning || runningSubagents > 0 || runningJobs > 0 || goal?.phase === 'active' || workflowRunning
+  // Capsule body = the latest activity event while anything is busy
+  // (v0.11.0 "single latest"); fully idle shrinks to a bare dot (v0.13.0
+  // experiment). The dot color follows the SAME condition as the capsule
+  // body, so the two can never disagree (a paused goal keeps the capsule
+  // strip visible — the dot turns yellow with it, not green).
+  // NOTE: the in-flight signal is `toolSince` (host clears it on tool/result);
+  // `agent.tool` alone would keep the capsule busy forever after the first
+  // tool call, so the shrink-to-dot experiment would never trigger.
+  const capsuleBusy = state !== null && (
+    agentRunning || state.agent.toolSince !== undefined
+    || state.subagents.some(s => s.kind === 'child' && s.activity === 'running')
+    || state.jobs.some(j => j.status === 'running' || j.status === 'stopping')
+    || (state.goal !== null && state.goal.phase !== 'complete')
+    || (state.agent.workflows ?? []).some(run => !run.settled)
+  )
   const dotColor = state === null ? C.faint
     : goal?.phase === 'blocked' ? C.red
-    : busy ? C.yellow
+    : capsuleBusy ? C.yellow
     : C.green
 
   const counts: Array<{ value: string; color: string; title: string }> = []
@@ -1079,15 +1081,6 @@ function PillRoot(): JSX.Element {
   if (inboxCount > 0) counts.push({ value: 'q', color: C.yellow, title: `${inboxCount} queued message${inboxCount > 1 ? 's' : ''}` })
   const toolName = state?.agent.tool
   const timeline = state?.timeline ?? []
-  // Capsule body = the latest activity event while anything is busy
-  // (v0.11.0 "single latest"); idle shows AGENT per the grill consensus.
-  const capsuleBusy = state !== null && (
-    state.agent.status === 'running' || state.agent.tool !== undefined
-    || state.subagents.some(s => s.kind === 'child' && s.activity === 'running')
-    || state.jobs.some(j => j.status === 'running' || j.status === 'stopping')
-    || (state.goal !== null && state.goal.phase !== 'complete')
-    || (state.agent.workflows ?? []).some(run => !run.settled)
-  )
   const latestEvent = timeline[0]
   const eventText = latestEvent !== undefined
     ? latestEvent.text.replace(/^tool /, '') + (latestEvent.detail !== undefined ? ` · ${latestEvent.detail}` : '')
@@ -1166,7 +1159,7 @@ function PillRoot(): JSX.Element {
         dragRef.current = null
         setDragging(false)
       },
-      title: `Agent activity (${counts.map(c => c.title).join(', ') || 'idle'})${toolName !== undefined ? ` — running ${toolName}` : ''} — drag to move, click or Ctrl+Alt+P for panel`,
+      title: `Agent activity (${counts.map(c => c.title).join(', ') || 'idle'})${toolName !== undefined && (state?.agent.toolSince !== undefined) ? ` — running ${toolName}` : ''} — drag to move, click or Ctrl+Alt+P for panel`,
       'aria-label': 'Agent activity',
       'aria-pressed': consoleOpen,
       style: {

@@ -20,7 +20,9 @@ function emit(): void {
 }
 
 function busyOf(next: PillState): boolean {
-  return next.agent.status === 'running' || next.agent.tool !== undefined
+  // In-flight tool = `toolSince` (host clears it on tool/result); `tool`
+  // alone is "last tool ever called" and would keep the loop hot forever.
+  return next.agent.status === 'running' || next.agent.toolSince !== undefined
     || next.subagents.some(s => s.kind === 'child' && s.activity === 'running')
     || next.jobs.some(j => j.status === 'running' || j.status === 'stopping')
     || (next.goal !== null && next.goal.phase !== 'complete')
