@@ -50,10 +50,12 @@ ZCode's task-status visibility:
    and falls back to `AGENT` when idle (click or Ctrl+Alt+P toggles the
    popover; drag to move).
 3. **Popover** (capsule-anchored): the **activity timeline** (full feed, first
-   screen) followed by the console — **Goal and Jobs** (with job detail layer).
-   Usage, Sessions, workflow history and subagent trees were removed: the
-   feed lives on the capsule and in the timeline, files live under each
-   instruction.
+   screen) followed by the console sections — **Workflow** (recent runs with
+   file-count badges; detail layer with steps and inline file diffs),
+   **Subagents** (descendant tree; detail layer with a link to the workflow
+   step that ran the child and that workflow's files), **Goal** and **Jobs**
+   (with job detail layer). All sections default collapsed and remember their
+   state in `localStorage`.
 
 Data is **current-session only**: files are aggregated per `sessionId × turn`
 from `tool/result` diffs; the timeline is per session; sessionless events
