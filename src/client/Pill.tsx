@@ -152,54 +152,10 @@ function fmtAgo(ms: number, now: number): string {
   return `${Math.floor(s / 3600)}h`
 }
 
-/** Compact token count: 12345 → "12.3k", -500 → "-500". */
-function fmtTokens(n: number): string {
-  if (Math.abs(n) >= 1000) return `${(n / 1000).toFixed(1)}k`
-  return String(n)
-}
-
 /** HH:MM:SS clock for timeline rows and capsule tooltips. */
 function fmtTimeOf(ts: number): string {
   const d = new Date(ts)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
-}
-
-/* ── DeepSeek cost estimate (official list prices, USD per 1M tokens) ──── */
-// Source: https://api-docs.deepseek.com/quick_start/pricing — peak hours
-// (Beijing 09:00-12:00, 14:00-18:00) double the price, off-peak halves it.
-const PRICE_INPUT = 0.27
-const PRICE_CACHE_READ = 0.07
-const PRICE_CACHE_WRITE = 0.27
-const PRICE_OUTPUT = 1.10
-/** Estimated context window used for the pressure bar when unknown. */
-const EST_CONTEXT_WINDOW = 200_000
-
-/** Current Beijing-time hour (for peak/off-peak pricing). */
-function bjHour(): number {
-  try {
-    const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Shanghai', hour: '2-digit', hour12: false })
-      .formatToParts(new Date())
-    return parseInt(parts.find(p => p.type === 'hour')?.value ?? '0', 10)
-  } catch {
-    return 0
-  }
-}
-
-/** Peak (2x) / off-peak (0.5x) multiplier by Beijing time. */
-function priceMultiplier(): number {
-  const h = bjHour()
-  return (h >= 9 && h < 12) || (h >= 14 && h < 18) ? 2 : 0.5
-}
-
-/** Estimated session cost in USD from accumulated token accounting. */
-function estimateCostUsd(consumed: { input: number; output: number; cacheRead: number; cacheWrite: number }): number {
-  const mult = priceMultiplier()
-  return (
-    consumed.input * PRICE_INPUT +
-    consumed.cacheRead * PRICE_CACHE_READ +
-    consumed.cacheWrite * PRICE_CACHE_WRITE +
-    consumed.output * PRICE_OUTPUT
-  ) * mult / 1_000_000
 }
 
 /** Browser notification (permission requested lazily; never throws). */
@@ -1278,56 +1234,6 @@ function PillRoot(): JSX.Element {
                       state,
                       onOpen: (job) => pushLayer({ kind: 'job', id: job.id }),
                     }),
-                )
-                : null,
-              state.services.usage && state.usage !== undefined
-                ? createElement('div', null,
-                  createElement(Section, {
-                    title: 'Usage', onToggle: () => toggleSection('usage'), collapsed: collapsed.usage === true,
-                  }),
-                  collapsed.usage === true
-                    ? null
-                    : createElement('div', null,
-                      // Context pressure bar (claude-statusline style):
-                      // threshold colors, rainbow at very high usage. The
-                      // denominator is the real model window when resolved.
-                      (() => {
-                        const window = state.usage.contextWindow ?? EST_CONTEXT_WINDOW
-                        const ratio = Math.min(1, state.usage.totalTokens / window)
-                        const barColor = ratio > 0.95
-                          ? 'linear-gradient(90deg,#e05a5a,#d9a13b,#3fb96a,#5a9cf0,#a37de8,#e05a5a)'
-                          : ratio > 0.85 ? C.red
-                          : ratio > 0.6 ? C.yellow
-                          : C.green
-                        return createElement('div', {
-                          style: { margin: '4px 0 6px', height: 6, borderRadius: 3, background: C.bg, overflow: 'hidden' },
-                          title: `${Math.round(ratio * 100)}% of ${state.usage.contextWindow !== undefined ? fmtTokens(state.usage.contextWindow) : `~${fmtTokens(EST_CONTEXT_WINDOW)} (assumed)`} context window`,
-                        },
-                          createElement('div', {
-                            style: {
-                              height: '100%', width: `${Math.round(ratio * 100)}%`,
-                              background: barColor, borderRadius: 3,
-                            },
-                          }),
-                        )
-                      })(),
-                      createElement(Row, { label: 'pressure', value: fmtTokens(state.usage.totalTokens), color: C.text }),
-                      createElement(Row, { label: 'surface', value: fmtTokens(state.usage.surfaceTokens), color: C.text }),
-                      createElement(Row, {
-                        label: 'delta',
-                        value: fmtTokens(state.usage.surfaceDeltaTokens),
-                        color: state.usage.surfaceDeltaTokens >= 0 ? C.text : C.green,
-                      }),
-                      state.consumed !== undefined
-                        ? createElement(Row, {
-                          label: 'cost',
-                          value: `~$${estimateCostUsd(state.consumed).toFixed(2)} · ${fmtTokens(
-                            state.consumed.input + state.consumed.cacheRead + state.consumed.cacheWrite + state.consumed.output,
-                          )} tok${priceMultiplier() > 1 ? ' · peak' : ' · off-peak'}`,
-                          color: priceMultiplier() > 1 ? C.yellow : C.text,
-                        })
-                        : null,
-                    ),
                 )
                 : null,
               !state.services.goals || !state.services.subagents || !state.services.jobs
