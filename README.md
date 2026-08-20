@@ -32,6 +32,9 @@ DSH (DeepSeek Harness) web plugin: a ZCode-style agent activity pill (top-right 
 - **Status strip (v0.8.0)**: the popover header is followed by a one-line "what is happening now" (workflow phase / tool / goal round) that clicks through to the workflow detail.
 - **File diffs (v0.8.0)**: workflow file chips open a **file detail layer** with the collected result-time diff (`tool/result` meta diffs from `dsh-tool-fs`: new-file, edit, or overwrite; rendered as a line-level diff) plus a copy-path button.
 - **Idle long-poll (v0.8.0)**: while everything is idle the client parks on a host long-poll (`POST /pill/api/poll`, 30s cap) instead of polling every 1.5s — activity wakes it, then the active cadence resumes.
+- **File list with inline diffs (v0.9.0)**: the workflow detail's Files section is now a list — each file shows its `+N`/`-N` line badge, expands inline to the diff (default: changed lines only, switchable to "with context"), carries a copy-path button, and no longer requires a third detail layer.
+- **Adaptive popover width (v0.9.0)**: the popover width follows its content (clamped 320–520px, viewport-capped) via ResizeObserver; diff rows keep their width (`white-space: pre`) instead of wrapping.
+- **Activity timeline (v0.9.0)**: a new Activity section streams the recent host events (tool calls and completions, file activity with per-path merge counting, workflow phase changes, subagent starts/ends, goal changes; bounded ring of 40) — "eyes on what the agent is doing internally".
 
 ## Install
 
