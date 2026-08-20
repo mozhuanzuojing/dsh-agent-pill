@@ -244,23 +244,25 @@ export class ActivityTracker {
     this.pushActivity({ kind: 'workflow', ts: Date.now(), text: `workflow ${run.name} ended`, detail: run.stopReason })
   }
 
-  /** Observe one `fs/observed` payload: attribute the file to the active run. */
+  /** Observe one `fs/observed` payload: feed the timeline unconditionally,
+   *  and attribute the file to the active workflow run when one is running. */
   onFsObserved(target: unknown): void {
-    const run = this.activeRun
-    if (run === null || run.settled) return
     const displayPath = str(target, 'displayPath')
     if (displayPath === undefined) return
-    if (!run.files.includes(displayPath)) run.files.push(displayPath)
-    // Activity feed: merge repeats of the same path within the window.
+    // Timeline: all file activity counts ("eyes on the internals").
     const now = Date.now()
-    const newest = this.timeline[0]
     const base = displayPath.split(/[\\/]/).pop() ?? displayPath
+    const newest = this.timeline[0]
     if (newest !== undefined && newest.kind === 'file' && newest.detail === displayPath && now - newest.ts < ActivityTracker.FILE_MERGE_MS) {
       newest.ts = now
       newest.count = (newest.count ?? 1) + 1
     } else {
       this.pushActivity({ kind: 'file', ts: now, text: base, detail: displayPath })
     }
+    // Run attribution: only while a workflow run is active.
+    const run = this.activeRun
+    if (run === null || run.settled) return
+    if (!run.files.includes(displayPath)) run.files.push(displayPath)
   }
 
   // ── Per-session live surface: current tool call, token accounting, inbox ──

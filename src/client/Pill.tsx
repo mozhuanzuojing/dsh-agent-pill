@@ -1030,11 +1030,15 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   const [panelPos, setPanelPos] = useState<{ top: number; left: number } | null>(null)
   // Adaptive width (v0.9.0): the popover follows its content's natural width,
   // clamped between 320 and min(520, viewport-16); diff rows keep their width.
+  // The observer watches a max-content content wrapper (workflow details only,
+  // where long diff rows live), so expanding a diff widens the popover; other
+  // views keep the block layout and wrap normally.
   const bodyRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
   const [panelWidth, setPanelWidth] = useState(360)
   useEffect(() => {
     if (!open) return
-    const el = bodyRef.current
+    const el = contentRef.current
     if (el === null) return
     const observer = new ResizeObserver(() => {
       const natural = el.scrollWidth + 28
@@ -1362,6 +1366,14 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
           className: layerAnim === 'in' ? 'pill-layer-in' : 'pill-layer-back',
           style: { flex: 1, overflowY: 'auto', padding: '4px 14px 20px' },
         },
+          // Content wrapper: max-content only for workflow details (long diff
+          // rows drive the adaptive width); other views keep block layout.
+          createElement('div', {
+            ref: contentRef,
+            style: detail !== null && detail.kind === 'workflow'
+              ? { width: 'max-content', minWidth: '100%' }
+              : { minWidth: '100%' },
+          },
           state === null
             ? createElement('div', { style: { color: C.faint, fontSize: 12, padding: '16px 0' } },
               sessionId === undefined ? 'No active conversation' : 'Loading…')
@@ -1577,6 +1589,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                 }, `Optional services: goals=${state.services.goals ? 'on' : 'off'} · subagents=${state.services.subagents ? 'on' : 'off'} · jobs=${state.services.jobs ? 'on' : 'off'}`)
                 : null,
             ),
+          ),
         ),
       )
       : null,
