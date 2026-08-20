@@ -53,6 +53,10 @@ body:not([data-ds-dark-theme]) {
   --pill-shadow-side: -6px 0 24px rgba(0,0,0,0.16);
   --pill-badge-text: #ffffff;
 }
+@keyframes pill-layer-in { from { transform: translateX(14px); opacity: 0.5; } to { transform: none; opacity: 1; } }
+@keyframes pill-layer-back { from { transform: translateX(-14px); opacity: 0.5; } to { transform: none; opacity: 1; } }
+.pill-layer-in { animation: pill-layer-in 100ms ease-out; }
+.pill-layer-back { animation: pill-layer-back 100ms ease-out; }
 `
 
 /* ── Palette (CSS variables; switches with the DSH theme automatically) ─── */
@@ -416,10 +420,9 @@ function SubagentDetail(props: { child: PillSubagent; ts: number; sessionId: str
   )
 }
 
-function JobRow(props: { job: PillJob; sessionId: string; now: number; onAction: () => void }): JSX.Element {
-  const { job, sessionId, now, onAction } = props
-  const [output, setOutput] = useState<{ text: string; truncated: boolean; read: boolean } | 'loading' | null>(null)
-  const [busy, setBusy] = useState(false)
+/** One job row in the list; click pushes the job detail layer. */
+function JobRow(props: { job: PillJob; now: number; onOpen: (job: PillJob) => void }): JSX.Element {
+  const { job, now, onOpen } = props
   const statusColor = job.status === 'running' || job.status === 'stopping' ? C.yellow
     : job.status === 'completed' ? C.green
     : job.status === 'killed' ? C.dim
@@ -427,17 +430,44 @@ function JobRow(props: { job: PillJob; sessionId: string; now: number; onAction:
   const timing = job.finishedAt !== undefined
     ? ` · took ${fmtDur(job.startedAt, job.finishedAt)} (${fmtAgo(job.finishedAt, now)} ago)`
     : ` · started ${fmtAgo(job.startedAt, now)} ago`
-  const toggle = (): void => {
-    if (output !== null && output !== 'loading') {
-      setOutput(null)
-      return
-    }
+  return createElement('div', {
+    onClick: () => onOpen(job),
+    style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', cursor: 'pointer' },
+    title: job.id,
+  },
+    createElement('span', { style: { width: 7, height: 7, borderRadius: 4, background: statusColor, flexShrink: 0 } }),
+    createElement('div', { style: { flex: 1, minWidth: 0 } },
+      createElement('div', {
+        style: { fontSize: 12, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+        title: `${job.id} · ${job.label}`,
+      }, job.label),
+      createElement('div', { style: { color: C.faint, fontSize: 10 } },
+        `${job.id} · ${job.status}${job.detail !== undefined ? ` · ${job.detail}` : ''}${timing}`),
+    ),
+    createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, '›'),
+  )
+}
+
+/** Job detail layer: identity, timing, full output and kill control. */
+function JobDetail(props: { job: PillJob; sessionId: string; ts: number; onAction: () => void }): JSX.Element {
+  const { job, sessionId, ts, onAction } = props
+  const [output, setOutput] = useState<{ text: string; truncated: boolean; read: boolean } | 'loading' | null>(null)
+  const [busy, setBusy] = useState(false)
+  const statusColor = job.status === 'running' || job.status === 'stopping' ? C.yellow
+    : job.status === 'completed' ? C.green
+    : job.status === 'killed' ? C.dim
+    : C.red
+  // Load the output lazily on first mount of the detail layer.
+  useEffect(() => {
+    let alive = true
     setOutput('loading')
-    void api.jobOutput(sessionId, job.id).then(setOutput).catch((error: unknown) => {
-      console.error('[dsh-agent-pill] job output failed:', error)
-      setOutput(null)
+    void api.jobOutput(sessionId, job.id).then((next) => {
+      if (alive) setOutput(next)
+    }).catch(() => {
+      if (alive) setOutput(null)
     })
-  }
+    return () => { alive = false }
+  }, [sessionId, job.id])
   const kill = (): void => {
     if (busy) return
     setBusy(true)
@@ -446,48 +476,49 @@ function JobRow(props: { job: PillJob; sessionId: string; now: number; onAction:
       .then(() => { setBusy(false) })
       .then(onAction)
   }
-  return createElement('div', { style: { padding: '4px 0' } },
-    createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-      createElement('span', { style: { width: 7, height: 7, borderRadius: 4, background: statusColor, flexShrink: 0 } }),
-      createElement('div', { style: { flex: 1, minWidth: 0 } },
-        createElement('div', {
-          style: { fontSize: 12, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-          title: `${job.id} · ${job.label}`,
-        }, job.label),
-        createElement('div', { style: { color: C.faint, fontSize: 10 } },
-          `${job.id} · ${job.status}${job.detail !== undefined ? ` · ${job.detail}` : ''}${timing}`),
-      ),
-      createElement('button', {
-        onClick: toggle, title: 'Output', 'aria-label': 'Output', style: iconButtonStyleSmall,
-      }, output !== null && output !== 'loading' ? 'hide' : 'out'),
-      (job.status === 'running' || job.status === 'stopping')
-        ? createElement('button', {
-          onClick: kill, title: 'Kill', 'aria-label': 'Kill', style: iconButtonStyleSmall, disabled: busy,
-        }, 'kill')
-        : null,
+  return createElement('div', null,
+    createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', marginBottom: 6 } },
+      createElement('span', { style: { width: 8, height: 8, borderRadius: 4, background: statusColor, flexShrink: 0 } }),
+      createElement('span', {
+        style: { fontSize: 13, color: C.text, fontWeight: 700, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      }, job.label),
     ),
+    createElement(Row, { label: 'id', value: job.id, color: C.faint }),
+    createElement(Row, { label: 'kind', value: job.kind, color: C.text }),
+    createElement(Row, { label: 'status', value: job.status, color: statusColor }),
+    job.detail !== undefined
+      ? createElement(Row, { label: 'detail', value: job.detail, color: C.text })
+      : null,
+    createElement(Row, { label: 'elapsed', value: fmtDur(job.startedAt, job.finishedAt ?? ts), color: C.text }),
+    job.finishedAt !== undefined
+      ? createElement(Row, { label: 'ended', value: fmtAgo(job.finishedAt, ts) + ' ago', color: C.faint })
+      : null,
+    (job.status === 'running' || job.status === 'stopping')
+      ? createElement('div', { style: { marginTop: 10 } },
+        createElement(IconButton, { label: 'Kill', onClick: kill, color: C.red, disabled: busy }),
+      )
+      : null,
+    createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 12, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, 'Output'),
     output === 'loading'
-      ? createElement('div', { style: { color: C.faint, fontSize: 11, padding: '4px 0 0 15px' } }, 'loading…')
+      ? createElement('div', { style: { color: C.faint, fontSize: 11, padding: '2px 0' } }, 'loading…')
       : output !== null
         ? createElement('pre', {
           style: {
-            margin: '4px 0 0 15px', padding: 6, background: C.bg, border: `1px solid ${C.border}`,
+            margin: '4px 0 0', padding: 8, background: C.bg, border: `1px solid ${C.border}`,
             borderRadius: 5, fontSize: 11, lineHeight: 1.45, color: C.text,
-            whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 160, overflow: 'auto',
+            whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 320, overflow: 'auto',
           },
         }, output.text === '' ? (output.read ? '(no readable output yet)' : '(model has not read this job)') : output.text + (output.truncated ? '\n…(truncated)' : ''))
-        : null,
+        : createElement('div', { style: { color: C.faint, fontSize: 11, padding: '2px 0' } }, 'unavailable'),
   )
 }
 
-function JobList(props: { state: PillState; onAction: () => void }): JSX.Element {
-  const { state, onAction } = props
-  if (state.jobs.length === 0) {
-    return createElement('div', { style: { color: C.faint, fontSize: 12, padding: '4px 0' } }, 'No background jobs')
-  }
+function JobList(props: { state: PillState; onOpen: (job: PillJob) => void }): JSX.Element | null {
+  const { state, onOpen } = props
+  if (state.jobs.length === 0) return null
   return createElement('div', null,
     state.jobs.map((job) => createElement(JobRow, {
-      key: job.id, job, sessionId: state.sessionId, now: state.ts, onAction,
+      key: job.id, job, now: state.ts, onOpen,
     })),
   )
 }
@@ -526,8 +557,10 @@ function WorkflowDetail(props: {
   run: PillWorkflowRun
   ts: number
   subagents: PillSubagent[]
+  onOpenSubagent: (childId: string) => void
 }): JSX.Element {
-  const { run, ts, subagents } = props
+  const { run, ts, subagents, onOpenSubagent } = props
+  const [copied, setCopied] = useState<string | null>(null)
   const statusColor = run.settled
     ? run.stopReason === 'completed' ? C.green
       : run.stopReason === 'error' ? C.red
@@ -547,6 +580,12 @@ function WorkflowDetail(props: {
     }
     return { detail: '', color: C.faint }
   }
+  const copyPath = (path: string): void => {
+    void navigator.clipboard.writeText(path).then(() => {
+      setCopied(path)
+      window.setTimeout(() => setCopied(null), 1200)
+    }).catch(() => { /* clipboard unavailable */ })
+  }
   return createElement('div', null,
     createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', marginBottom: 6 } },
       createElement('span', { style: { width: 8, height: 8, borderRadius: 4, background: statusColor, flexShrink: 0 } }),
@@ -564,14 +603,19 @@ function WorkflowDetail(props: {
       ? createElement('div', { style: { color: C.faint, fontSize: 11, padding: '2px 0' } }, 'no agent calls observed')
       : run.steps.map((step) => {
         const linked = stepMeta(step.childId)
+        const linkable = step.childId !== undefined && subagents.some(s => s.id === step.childId)
         return createElement('div', {
           key: step.seq,
-          style: { display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' },
+          onClick: linkable ? () => onOpenSubagent(step.childId as string) : undefined,
+          style: {
+            display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0',
+            ...(linkable ? { cursor: 'pointer' } : {}),
+          },
+          title: linkable ? 'Open subagent detail' : (step.childId ?? step.label),
         },
           createElement('span', { style: { color: C.faint, fontSize: 10, minWidth: 22, fontVariantNumeric: 'tabular-nums' } }, `#${step.seq}`),
           createElement('span', {
             style: { fontSize: 12, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
-            title: step.childId ?? step.label,
           }, step.label),
           step.phase !== undefined
             ? createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, step.phase)
@@ -582,6 +626,9 @@ function WorkflowDetail(props: {
           step.outcome !== undefined
             ? createElement('span', { style: { color: outcomeColor(step.outcome), fontSize: 10, flexShrink: 0 } }, step.outcome)
             : null,
+          linkable
+            ? createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, '›')
+            : null,
         )
       }),
     run.files.length > 0
@@ -591,12 +638,13 @@ function WorkflowDetail(props: {
           run.files.map((file) => createElement('span', {
             key: file,
             title: file,
+            onClick: () => copyPath(file),
             style: {
               fontSize: 10, color: C.text, background: C.bg, border: `1px solid ${C.border}`,
-              borderRadius: 4, padding: '1px 6px', maxWidth: 240,
+              borderRadius: 4, padding: '1px 6px', maxWidth: 240, cursor: 'pointer',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             },
-          }, fileBase(file))),
+          }, copied === file ? '✓ copied' : fileBase(file))),
         ),
       )
       : null,
@@ -618,10 +666,16 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   const { sessions } = props
   const [open, setOpen] = useState(false)
   const [state, setState] = useState<PillState | null>(null)
-  // Detail layer: a pushed view (workflow / subagent) on top of the main
-  // list; back returns. Cleared when the target disappears or on session
-  // switch.
-  const [detail, setDetail] = useState<{ kind: 'workflow'; id: string } | { kind: 'subagent'; id: string } | null>(null)
+  // Detail layer: a pushed view (workflow / subagent / job) on top of the
+  // main list; back returns one level. Cleared when the target disappears
+  // or on session switch.
+  const [detail, setDetail] = useState<
+    { kind: 'workflow'; id: string } | { kind: 'subagent'; id: string } | { kind: 'job'; id: string } | null
+  >(null)
+  // Animation direction for layer transitions (enter pushes from the right,
+  // back slides from the left); derived from the previous detail presence.
+  const [layerAnim, setLayerAnim] = useState<'in' | 'back'>('in')
+  const prevDetailRef = useRef<{ kind: string; id: string } | null>(null)
   const inFlight = useRef(false)
 
   // ── Capsule drag ──
@@ -707,14 +761,22 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
     if (notifiedRef.current === null) notifiedRef.current = new Set()
   }, [state])
 
-  // Ctrl+Alt+P toggles the popover; Esc closes it.
+  // Ctrl+Alt+P toggles the popover; Esc returns one layer first (detail →
+  // main → close), then closes.
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.ctrlKey && event.altKey && (event.key === 'p' || event.key === 'P')) {
         event.preventDefault()
         setOpen(prev => !prev)
       } else if (event.key === 'Escape') {
-        setOpen(false)
+        setDetail(prev => {
+          if (prev !== null) {
+            setLayerAnim('back')
+            return null
+          }
+          setOpen(false)
+          return prev
+        })
       }
     }
     window.addEventListener('keydown', onKey, true)
@@ -851,11 +913,25 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   const detailChild = detail !== null && detail.kind === 'subagent'
     ? (state?.subagents ?? []).find(child => child.id === detail.id)
     : undefined
+  const detailJob = detail !== null && detail.kind === 'job'
+    ? (state?.jobs ?? []).find(job => job.id === detail.id)
+    : undefined
   useEffect(() => {
-    if (detail !== null && detailRun === undefined && detailChild === undefined && state !== null) {
+    if (detail !== null && detailRun === undefined && detailChild === undefined && detailJob === undefined && state !== null) {
       setDetail(null)
     }
-  }, [detail, detailRun, detailChild, state])
+  }, [detail, detailRun, detailChild, detailJob, state])
+  // Track layer direction for the push/back animation (entering a layer
+  // pushes from the right; returning to the previous level slides back).
+  useEffect(() => {
+    const prev = prevDetailRef.current
+    const prevActive = prev !== null
+    const nowActive = detail !== null
+    if (nowActive && !prevActive) setLayerAnim('in')
+    if (!nowActive && prevActive) setLayerAnim('back')
+    if (nowActive && prevActive && (prev.kind !== detail.kind || prev.id !== detail.id)) setLayerAnim('in')
+    prevDetailRef.current = detail
+  }, [detail])
 
   return createElement('div', { ref: rootRef },
     // ── Capsule (draggable; click toggles the popover) ──
@@ -966,14 +1042,19 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
           detail !== null
             ? createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 } },
               createElement('button', {
-                onClick: () => setDetail(null),
+                onClick: () => {
+                  setLayerAnim('back')
+                  setDetail(null)
+                },
                 'aria-label': 'Back',
                 title: 'Back',
                 style: { ...iconButtonStyle, fontSize: 13, padding: '2px 9px', flexShrink: 0 },
               }, '←'),
               createElement('span', {
                 style: { color: C.text, fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
-              }, detail.kind === 'workflow' ? (detailRun?.name ?? 'Workflow') : (detailChild?.label ?? 'Subagent')),
+              }, detail.kind === 'workflow' ? (detailRun?.name ?? 'Workflow')
+                : detail.kind === 'subagent' ? (detailChild?.label ?? 'Subagent')
+                : (detailJob?.label ?? 'Job')),
             )
             : createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
               createElement('span', { style: { width: 9, height: 9, borderRadius: 5, background: dotColor } }),
@@ -988,12 +1069,24 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
           }, '✕'),
         ),
         // ── Scrollable body: detail layer (pushed) or the main view ──
-        createElement('div', { style: { flex: 1, overflowY: 'auto', padding: '4px 14px 20px' } },
+        createElement('div', {
+          key: detail === null ? 'main' : `${detail.kind}:${detail.id}`,
+          className: layerAnim === 'in' ? 'pill-layer-in' : 'pill-layer-back',
+          style: { flex: 1, overflowY: 'auto', padding: '4px 14px 20px' },
+        },
           state === null
             ? createElement('div', { style: { color: C.faint, fontSize: 12, padding: '16px 0' } },
               sessionId === undefined ? 'No active conversation' : 'Loading…')
             : detail !== null && detail.kind === 'workflow' && detailRun !== undefined
-              ? createElement(WorkflowDetail, { run: detailRun, ts: state.ts, subagents: state.subagents })
+              ? createElement(WorkflowDetail, {
+                run: detailRun,
+                ts: state.ts,
+                subagents: state.subagents,
+                onOpenSubagent: (childId) => {
+                  setLayerAnim('in')
+                  setDetail({ kind: 'subagent', id: childId })
+                },
+              })
               : detail !== null && detail.kind === 'subagent' && detailChild !== undefined
                 ? createElement(SubagentDetail, {
                   child: detailChild,
@@ -1001,7 +1094,14 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                   sessionId: state.sessionId,
                   onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) },
                 })
-                : createElement('div', null,
+                : detail !== null && detail.kind === 'job' && detailJob !== undefined
+                  ? createElement(JobDetail, {
+                    job: detailJob,
+                    sessionId: state.sessionId,
+                    ts: state.ts,
+                    onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) },
+                  })
+                  : createElement('div', null,
               // ── Empty-state hiding (v0.6.0): a section renders only when it
               // has real content; the header above always stays. ──
               state.goal !== null
@@ -1085,7 +1185,13 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                   }),
                   collapsed.jobs === true
                     ? null
-                    : createElement(JobList, { state, onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) } }),
+                    : createElement(JobList, {
+                      state,
+                      onOpen: (job) => {
+                        setLayerAnim('in')
+                        setDetail({ kind: 'job', id: job.id })
+                      },
+                    }),
                 )
                 : null,
               state.services.usage && state.usage !== undefined
