@@ -127,6 +127,15 @@ export interface PillFileDiff {
   ts: number
 }
 
+/** One activity-timeline event ("eyes on the internals" feed). */
+export interface PillActivityEvent {
+  kind: 'tool' | 'tool-done' | 'file' | 'workflow' | 'subagent' | 'goal'
+  ts: number
+  text: string
+  detail?: string
+  count?: number
+}
+
 /** One aggregated state snapshot. */
 export interface PillState {
   sessionId: string
@@ -138,6 +147,7 @@ export interface PillState {
   usage?: PillUsage
   consumed?: PillConsumed
   fileDiffs?: PillFileDiff[]
+  timeline?: PillActivityEvent[]
   agents?: PillFleetAgent[]
   services: { goals: boolean; subagents: boolean; jobs: boolean; agents: boolean; usage: boolean }
 }

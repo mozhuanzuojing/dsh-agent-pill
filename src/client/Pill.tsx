@@ -10,7 +10,7 @@
  */
 import { createElement, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ISessions } from '@deepseek-ai/dsh-client-runtime/client'
-import { api, PillApiError, type PillJob, type PillState, type PillSubagent, type PillWorkflowRun } from './api.ts'
+import { api, PillApiError, type PillActivityEvent, type PillFileDiff, type PillJob, type PillState, type PillSubagent, type PillWorkflowRun } from './api.ts'
 
 /**
  * Theme-driven palette stylesheet. Dark is the :root default (matching the
@@ -558,9 +558,9 @@ function WorkflowDetail(props: {
   ts: number
   subagents: PillSubagent[]
   onOpenSubagent: (childId: string) => void
-  onOpenFile: (path: string) => void
+  fileDiffs: PillFileDiff[]
 }): JSX.Element {
-  const { run, ts, subagents, onOpenSubagent, onOpenFile } = props
+  const { run, ts, subagents, onOpenSubagent, fileDiffs } = props
   const statusColor = run.settled
     ? run.stopReason === 'completed' ? C.green
       : run.stopReason === 'error' ? C.red
@@ -627,19 +627,21 @@ function WorkflowDetail(props: {
       }),
     run.files.length > 0
       ? createElement('div', null,
-        createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 10, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, `Files observed (${run.files.length})`),
-        createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 4 } },
-          run.files.map((file) => createElement('span', {
-            key: file,
-            title: `${file} — click for diff`,
-            onClick: () => onOpenFile(file),
-            style: {
-              fontSize: 10, color: C.text, background: C.bg, border: `1px solid ${C.border}`,
-              borderRadius: 4, padding: '1px 6px', maxWidth: 240, cursor: 'pointer',
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            },
-          }, fileBase(file))),
-        ),
+        createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 10, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, `Files (${run.files.length})`),
+        run.files.map((file) => {
+          const diff = fileDiffs.find(d => d.path === file)
+          if (diff === undefined) {
+            // File observed but no collected diff (read-only activity).
+            return createElement('div', { key: file, style: { display: 'flex', alignItems: 'center', gap: 8, padding: '3px 4px' } },
+              createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, '·'),
+              createElement('span', {
+                style: { fontSize: 11, color: C.faint, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+                title: file,
+              }, fileBase(file)),
+            )
+          }
+          return createElement(FileRow, { key: file, diff, now: ts })
+        }),
       )
       : null,
   )
@@ -699,57 +701,128 @@ function diffLines(oldText: string | null, newText: string): Array<{ type: 'same
   return out
 }
 
-/** File detail layer: path, copy, and the collected diff (if any). */
-function FileDetail(props: {
-  path: string
-  ts: number
-  diff: { oldText: string | null; newText: string } | undefined
-}): JSX.Element {
-  const { path, ts, diff } = props
+/** Count add/del lines for the +/- badge. */
+function diffCounts(diff: { oldText: string | null; newText: string }): { added: number; removed: number } {
+  let added = 0
+  let removed = 0
+  for (const row of diffLines(diff.oldText, diff.newText)) {
+    if (row.type === 'add') added++
+    else if (row.type === 'del') removed++
+  }
+  return { added, removed }
+}
+
+/** One file row inside a workflow detail: name + +/- badge, inline diff. */
+function FileRow(props: { diff: PillFileDiff; now: number }): JSX.Element {
+  const { diff, now } = props
+  const [expanded, setExpanded] = useState(false)
+  const [context, setContext] = useState(false)
   const [copied, setCopied] = useState(false)
-  const fileBase = path.split(/[\\/]/).pop() ?? path
+  const fileBase = diff.path.split(/[\\/]/).pop() ?? diff.path
+  const counts = diffCounts(diff)
   const copyPath = (): void => {
-    void navigator.clipboard.writeText(path).then(() => {
+    void navigator.clipboard.writeText(diff.path).then(() => {
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1200)
     }).catch(() => { /* clipboard unavailable */ })
   }
-  return createElement('div', null,
-    createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', marginBottom: 6 } },
-      createElement('span', { style: { width: 8, height: 8, borderRadius: 4, background: C.purple, flexShrink: 0 } }),
+  const rows = diffLines(diff.oldText, diff.newText)
+  const visible = context ? rows : rows.filter(row => row.type !== 'same')
+  return createElement('div', { style: { marginBottom: 2 } },
+    createElement('div', {
+      onClick: () => setExpanded(prev => !prev),
+      title: diff.path,
+      style: { display: 'flex', alignItems: 'center', gap: 8, padding: '3px 4px', cursor: 'pointer', borderRadius: 4 },
+    },
+      createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, expanded ? '▾' : '▸'),
       createElement('span', {
-        style: { fontSize: 13, color: C.text, fontWeight: 700, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-        title: path,
+        style: { fontSize: 11, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
       }, fileBase),
+      counts.added > 0
+        ? createElement('span', { style: { color: C.green, fontSize: 10, flexShrink: 0, fontVariantNumeric: 'tabular-nums' } }, `+${counts.added}`)
+        : null,
+      counts.removed > 0
+        ? createElement('span', { style: { color: C.red, fontSize: 10, flexShrink: 0, fontVariantNumeric: 'tabular-nums' } }, `-${counts.removed}`)
+        : null,
       createElement('button', {
-        onClick: copyPath,
+        onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+          event.stopPropagation()
+          copyPath()
+        },
         'aria-label': 'Copy path',
         title: 'Copy full path',
         style: iconButtonStyleSmall,
       }, copied ? '✓' : 'copy'),
     ),
-    createElement(Row, { label: 'path', value: path, color: C.faint }),
-    createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 10, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, 'Diff'),
-    diff === undefined
-      ? createElement('div', { style: { color: C.faint, fontSize: 11, padding: '2px 0' } },
-        'no collected diff (file was read or observed, not edited by this host)')
-      : createElement('pre', {
+    expanded
+      ? createElement('div', {
         style: {
-          margin: '4px 0 0', padding: 8, background: C.bg, border: `1px solid ${C.border}`,
-          borderRadius: 5, fontSize: 11, lineHeight: 1.45, maxHeight: 360, overflow: 'auto',
+          margin: '2px 0 6px 18px', padding: 6, background: C.bg, border: `1px solid ${C.border}`,
+          borderRadius: 5, overflowX: 'auto',
         },
       },
-        diffLines(diff.oldText, diff.newText).map((row, index) => createElement('div', {
-          key: index,
-          style: {
-            color: row.type === 'add' ? C.green : row.type === 'del' ? C.red : C.text,
-            background: row.type === 'add' ? 'rgba(63,185,106,0.08)' : row.type === 'del' ? 'rgba(224,90,90,0.08)' : 'transparent',
-            whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-          },
-        }, `${row.type === 'add' ? '+' : row.type === 'del' ? '-' : ' '} ${row.text}`)),
-      ),
-    createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 8 } },
-      `collected ${fmtAgo(ts, Date.now())} ago`),
+        createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', marginBottom: 4 } },
+          createElement('button', {
+            onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+              event.stopPropagation()
+              setContext(prev => !prev)
+            },
+            style: iconButtonStyleSmall,
+          }, context ? 'changes only' : 'with context'),
+        ),
+        visible.length === 0
+          ? createElement('div', { style: { color: C.faint, fontSize: 10 } }, '(no line changes)')
+          : createElement('pre', { style: { margin: 0, fontSize: 11, lineHeight: 1.45 } },
+            visible.map((row, index) => createElement('div', {
+              key: index,
+              style: {
+                color: row.type === 'add' ? C.green : row.type === 'del' ? C.red : C.dim,
+                background: row.type === 'add' ? 'rgba(63,185,106,0.08)' : row.type === 'del' ? 'rgba(224,90,90,0.08)' : 'transparent',
+                whiteSpace: 'pre',
+              },
+            }, `${row.type === 'add' ? '+' : row.type === 'del' ? '-' : ' '} ${row.text}`)),
+          ),
+      )
+      : null,
+    createElement('div', { style: { color: C.faint, fontSize: 9, margin: '0 0 4px 18px' } },
+      `${fmtAgo(diff.ts, now)} ago`),
+  )
+}
+
+/** Activity timeline ("eyes on the internals"): newest first event feed. */
+function ActivityList(props: { timeline: PillActivityEvent[] }): JSX.Element {
+  const { timeline } = props
+  const META: Record<string, { icon: string; color: string }> = {
+    tool: { icon: '⛭', color: C.blue },
+    'tool-done': { icon: '✓', color: C.green },
+    file: { icon: '✎', color: C.purple },
+    workflow: { icon: '⚙', color: C.purple },
+    subagent: { icon: '▸', color: C.blue },
+    goal: { icon: '🎯', color: C.yellow },
+  }
+  const fmtTime = (ts: number): string => {
+    const d = new Date(ts)
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
+  }
+  return createElement('div', null,
+    timeline.map((event, index) => {
+      const meta = META[event.kind] ?? { icon: '·', color: C.faint }
+      const suffix = (event.count !== undefined && event.count > 1 ? ` ×${event.count}` : '')
+        + (event.detail !== undefined ? ` · ${event.detail}` : '')
+      return createElement('div', {
+        key: index,
+        style: { display: 'flex', alignItems: 'baseline', gap: 8, padding: '2px 0' },
+      },
+        createElement('span', {
+          style: { color: C.faint, fontSize: 9, flexShrink: 0, fontVariantNumeric: 'tabular-nums' },
+        }, fmtTime(event.ts)),
+        createElement('span', { style: { color: meta.color, fontSize: 11, flexShrink: 0 } }, meta.icon),
+        createElement('span', {
+          style: { fontSize: 11, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+          title: event.detail ?? event.text,
+        }, event.text + suffix),
+      )
+    }),
   )
 }
 
@@ -767,7 +840,6 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
     | { kind: 'workflow'; id: string }
     | { kind: 'subagent'; id: string }
     | { kind: 'job'; id: string }
-    | { kind: 'file'; id: string }
   const [layers, setLayers] = useState<PillLayer[]>([])
   const detail = layers.length > 0 ? (layers[layers.length - 1] ?? null) : null
   const pushLayer = (layer: PillLayer): void => {
@@ -956,6 +1028,22 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   // Popover geometry: anchored to the capsule, flipped to stay in viewport.
   const capsuleRef = useRef<HTMLButtonElement>(null)
   const [panelPos, setPanelPos] = useState<{ top: number; left: number } | null>(null)
+  // Adaptive width (v0.9.0): the popover follows its content's natural width,
+  // clamped between 320 and min(520, viewport-16); diff rows keep their width.
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const [panelWidth, setPanelWidth] = useState(360)
+  useEffect(() => {
+    if (!open) return
+    const el = bodyRef.current
+    if (el === null) return
+    const observer = new ResizeObserver(() => {
+      const natural = el.scrollWidth + 28
+      const next = Math.min(Math.max(natural, 320), 520, window.innerWidth - 16)
+      setPanelWidth(prev => (Math.abs(prev - next) > 4 ? next : prev))
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [open, detail])
   useEffect(() => {
     if (!open) return
     const compute = (): void => {
@@ -1068,6 +1156,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   const toolName = state?.agent.tool
   const fleet = state?.agents ?? []
   const recentTools = state?.agent.recentTools ?? []
+  const timeline = state?.timeline ?? []
   // Capsule live label (v0.8.0): workflow "name·phase" → current tool → AGENT.
   const nowMs = state?.ts ?? Date.now()
   const capsuleLabel = runningWorkflow !== undefined
@@ -1098,14 +1187,11 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   const detailJob = detail !== null && detail.kind === 'job'
     ? (state?.jobs ?? []).find(job => job.id === detail.id)
     : undefined
-  const detailFile = detail !== null && detail.kind === 'file'
-    ? (state?.fileDiffs ?? []).find(diff => diff.path === detail.id)
-    : undefined
   useEffect(() => {
-    if (detail !== null && detailRun === undefined && detailChild === undefined && detailJob === undefined && detailFile === undefined && state !== null) {
+    if (detail !== null && detailRun === undefined && detailChild === undefined && detailJob === undefined && state !== null) {
       popLayer()
     }
-  }, [detail, detailRun, detailChild, detailJob, detailFile, state])
+  }, [detail, detailRun, detailChild, detailJob, state])
 
   return createElement('div', { ref: rootRef },
     // ── Capsule (draggable; click toggles the popover) ──
@@ -1206,7 +1292,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
       ? createElement('div', {
         style: {
           position: 'fixed', top: panelPos.top, left: panelPos.left,
-          width: Math.min(360, window.innerWidth - 16),
+          width: panelWidth,
           maxHeight: '70vh', zIndex: 2147483002,
           background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10,
           display: 'flex', flexDirection: 'column', overflow: 'hidden',
@@ -1232,8 +1318,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                 style: { color: C.text, fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
               }, detail.kind === 'workflow' ? (detailRun?.name ?? 'Workflow')
                 : detail.kind === 'subagent' ? (detailChild?.label ?? 'Subagent')
-                : detail.kind === 'job' ? (detailJob?.label ?? 'Job')
-                : (detailFile?.path.split(/[\\/]/).pop() ?? 'File')),
+                : (detailJob?.label ?? 'Job')),
             )
             : createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
               createElement('span', { style: { width: 9, height: 9, borderRadius: 5, background: dotColor } }),
@@ -1273,6 +1358,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
         // ── Scrollable body: detail layer (pushed) or the main view ──
         createElement('div', {
           key: detail === null ? 'main' : `${detail.kind}:${detail.id}`,
+          ref: bodyRef,
           className: layerAnim === 'in' ? 'pill-layer-in' : 'pill-layer-back',
           style: { flex: 1, overflowY: 'auto', padding: '4px 14px 20px' },
         },
@@ -1287,9 +1373,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                 onOpenSubagent: (childId) => {
                   pushLayer({ kind: 'subagent', id: childId })
                 },
-                onOpenFile: (path) => {
-                  pushLayer({ kind: 'file', id: path })
-                },
+                fileDiffs: state.fileDiffs ?? [],
               })
               : detail !== null && detail.kind === 'subagent' && detailChild !== undefined
                 ? createElement(SubagentDetail, {
@@ -1305,13 +1389,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                     ts: state.ts,
                     onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) },
                   })
-                  : detail !== null && detail.kind === 'file' && detailFile !== undefined
-                    ? createElement(FileDetail, {
-                      path: detailFile.path,
-                      ts: detailFile.ts,
-                      diff: { oldText: detailFile.oldText, newText: detailFile.newText },
-                    })
-                    : createElement('div', null,
+                  : createElement('div', null,
               // ── Empty-state hiding (v0.6.0): a section renders only when it
               // has real content; the header above always stays. ──
               state.goal !== null
@@ -1369,6 +1447,17 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                         onOpen: (run) => pushLayer({ kind: 'workflow', id: run.id }),
                       }),
                     ),
+                )
+                : null,
+              timeline.length > 0
+                ? createElement('div', null,
+                  createElement(Section, {
+                    title: 'Activity', count: timeline.length,
+                    onToggle: () => toggleSection('activity'), collapsed: collapsed.activity === true,
+                  }),
+                  collapsed.activity === true
+                    ? null
+                    : createElement(ActivityList, { timeline }),
                 )
                 : null,
               state.subagents.filter(s => s.kind === 'child').length > 0 || state.subagents.some(s => s.kind === 'diagnostic')
