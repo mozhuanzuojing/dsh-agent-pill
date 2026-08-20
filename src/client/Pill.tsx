@@ -304,8 +304,12 @@ function GoalCard(props: { state: PillState; onAction: () => void }): JSX.Elemen
   )
 }
 
-function SubagentList(props: { state: PillState; onAction: () => void }): JSX.Element {
-  const { state, onAction } = props
+function SubagentList(props: {
+  state: PillState
+  onAction: () => void
+  onOpen: (child: PillSubagent & { kind: 'child' }) => void
+}): JSX.Element {
+  const { state, onAction, onOpen } = props
   const children = state.subagents.filter((s): s is PillSubagent & { kind: 'child' } => s.kind === 'child')
   const diagnostics = state.subagents.filter(s => s.kind === 'diagnostic')
   if (children.length === 0 && diagnostics.length === 0) {
@@ -329,7 +333,9 @@ function SubagentList(props: { state: PillState; onAction: () => void }): JSX.El
       const metaColor = child.stopReason === 'failed' ? C.red : C.faint
       return createElement('div', {
         key: child.id,
-        style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', paddingLeft: indent },
+        onClick: () => onOpen(child),
+        style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', paddingLeft: indent, cursor: 'pointer' },
+        title: child.id,
       },
         createElement('span', {
           style: {
@@ -346,7 +352,10 @@ function SubagentList(props: { state: PillState; onAction: () => void }): JSX.El
             `${child.mode ?? 'one-shot'} · ${child.activity ?? 'inactive'}${elapsed}${settled}`),
         ),
         createElement('button', {
-          onClick: () => stop(child.id),
+          onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+            event.stopPropagation()
+            stop(child.id)
+          },
           title: `Interrupt ${child.id}`,
           'aria-label': `Interrupt ${child.id}`,
           style: iconButtonStyleSmall,
@@ -358,6 +367,53 @@ function SubagentList(props: { state: PillState; onAction: () => void }): JSX.El
       title: d.id,
     }, `unreadable: ${d.reason} (${d.id})`)),
   ])
+}
+
+/** Subagent detail layer (pushed on top of the main view, back returns). */
+function SubagentDetail(props: { child: PillSubagent; ts: number; sessionId: string; onAction: () => void }): JSX.Element {
+  const { child, ts, sessionId, onAction } = props
+  const metaColor = child.stopReason === 'failed' ? C.red : C.faint
+  const elapsed = child.startedAt !== undefined
+    ? child.finishedAt !== undefined
+      ? fmtDur(child.startedAt, child.finishedAt)
+      : fmtDur(child.startedAt, ts)
+    : 'unknown'
+  const stop = (): void => {
+    void api.subagentInterrupt(sessionId, child.id)
+      .catch((error: unknown) => console.error('[dsh-agent-pill] interrupt failed:', error))
+      .then(onAction)
+  }
+  return createElement('div', null,
+    createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', marginBottom: 6 } },
+      createElement('span', {
+        style: {
+          width: 8, height: 8, borderRadius: 4, flexShrink: 0,
+          background: child.activity === 'running' ? C.yellow : C.faint,
+        },
+      }),
+      createElement('span', {
+        style: { fontSize: 13, color: C.text, fontWeight: 700, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      }, child.label ?? child.id),
+    ),
+    createElement(Row, { label: 'id', value: child.id, color: C.faint }),
+    createElement(Row, { label: 'mode', value: child.mode ?? 'one-shot', color: C.text }),
+    createElement(Row, { label: 'activity', value: child.activity ?? 'inactive', color: child.activity === 'running' ? C.yellow : metaColor }),
+    child.depth !== undefined
+      ? createElement(Row, { label: 'depth', value: String(child.depth), color: C.text })
+      : null,
+    child.parentId !== undefined
+      ? createElement(Row, { label: 'parent', value: child.parentId, color: C.faint })
+      : null,
+    createElement(Row, { label: 'elapsed', value: elapsed, color: C.text }),
+    child.stopReason !== undefined
+      ? createElement(Row, { label: 'ended', value: child.stopReason, color: metaColor })
+      : null,
+    child.activity === 'running'
+      ? createElement('div', { style: { marginTop: 10 } },
+        createElement(IconButton, { label: 'Stop (interrupt)', onClick: stop, color: C.red }),
+      )
+      : null,
+  )
 }
 
 function JobRow(props: { job: PillJob; sessionId: string; now: number; onAction: () => void }): JSX.Element {
@@ -438,9 +494,40 @@ function JobList(props: { state: PillState; onAction: () => void }): JSX.Element
 
 /* ── Workflow history: runs with steps and observed files ──────────────── */
 
-function WorkflowRow(props: { run: PillWorkflowRun; ts: number; subagents: PillSubagent[] }): JSX.Element {
+/** One workflow run row in the list; click pushes the detail layer. */
+function WorkflowRow(props: {
+  run: PillWorkflowRun
+  ts: number
+  onOpen: (run: PillWorkflowRun) => void
+}): JSX.Element {
+  const { run, ts, onOpen } = props
+  const statusColor = run.settled
+    ? run.stopReason === 'completed' ? C.green
+      : run.stopReason === 'error' ? C.red
+      : C.dim
+    : C.yellow
+  return createElement('div', {
+    onClick: () => onOpen(run),
+    style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', cursor: 'pointer', borderRadius: 6, background: C.panel2, border: `1px solid ${C.border}`, marginBottom: 4 },
+    title: run.id,
+  },
+    createElement('span', { style: { width: 7, height: 7, borderRadius: 4, background: statusColor, flexShrink: 0 } }),
+    createElement('span', {
+      style: { fontSize: 12, color: C.text, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+    }, run.name),
+    createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } },
+      `${run.settled ? (run.stopReason ?? 'ended') : (run.phase ?? 'starting')} · ${fmtDur(run.startedAt, ts)}`),
+    createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, '›'),
+  )
+}
+
+/** Workflow detail layer (pushed on top of the main view, back returns). */
+function WorkflowDetail(props: {
+  run: PillWorkflowRun
+  ts: number
+  subagents: PillSubagent[]
+}): JSX.Element {
   const { run, ts, subagents } = props
-  const [expanded, setExpanded] = useState(false)
   const statusColor = run.settled
     ? run.stopReason === 'completed' ? C.green
       : run.stopReason === 'error' ? C.red
@@ -460,74 +547,68 @@ function WorkflowRow(props: { run: PillWorkflowRun; ts: number; subagents: PillS
     }
     return { detail: '', color: C.faint }
   }
-  return createElement('div', { style: { marginBottom: 6 } },
-    createElement('div', {
-      onClick: () => setExpanded(prev => !prev),
-      style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', cursor: 'pointer', borderRadius: 6, background: C.panel2, border: `1px solid ${C.border}` },
-      title: run.id,
-    },
-      createElement('span', { style: { width: 7, height: 7, borderRadius: 4, background: statusColor, flexShrink: 0 } }),
-      createElement('span', {
-        style: { fontSize: 12, color: C.text, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
-      }, run.name),
-      createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } },
-        `${run.settled ? (run.stopReason ?? 'ended') : (run.phase ?? 'starting')} · ${fmtDur(run.startedAt, ts)}`),
-      createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, expanded ? '▾' : '▸'),
+  return createElement('div', null,
+    createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', marginBottom: 6 } },
+      createElement('span', { style: { width: 8, height: 8, borderRadius: 4, background: statusColor, flexShrink: 0 } }),
+      createElement('span', { style: { fontSize: 13, color: C.text, fontWeight: 700, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, run.name),
     ),
-    expanded
-      ? createElement('div', { style: { padding: '6px 4px 2px 10px' } },
-        createElement('div', { style: { color: C.faint, fontSize: 10, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, 'Steps'),
-        run.steps.length === 0
-          ? createElement('div', { style: { color: C.faint, fontSize: 11, padding: '2px 0' } }, 'no agent calls observed')
-          : run.steps.map((step) => {
-            const linked = stepMeta(step.childId)
-            return createElement('div', {
-              key: step.seq,
-              style: { display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' },
+    createElement(Row, { label: 'id', value: run.id, color: C.faint }),
+    createElement(Row, {
+      label: 'status',
+      value: run.settled ? (run.stopReason ?? 'ended') : (run.phase ?? 'running'),
+      color: statusColor,
+    }),
+    createElement(Row, { label: 'elapsed', value: fmtDur(run.startedAt, ts), color: C.text }),
+    createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 10, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, `Steps (${run.steps.length})`),
+    run.steps.length === 0
+      ? createElement('div', { style: { color: C.faint, fontSize: 11, padding: '2px 0' } }, 'no agent calls observed')
+      : run.steps.map((step) => {
+        const linked = stepMeta(step.childId)
+        return createElement('div', {
+          key: step.seq,
+          style: { display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' },
+        },
+          createElement('span', { style: { color: C.faint, fontSize: 10, minWidth: 22, fontVariantNumeric: 'tabular-nums' } }, `#${step.seq}`),
+          createElement('span', {
+            style: { fontSize: 12, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+            title: step.childId ?? step.label,
+          }, step.label),
+          step.phase !== undefined
+            ? createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, step.phase)
+            : null,
+          linked.detail !== ''
+            ? createElement('span', { style: { color: linked.color, fontSize: 10, flexShrink: 0 } }, linked.detail.trim())
+            : null,
+          step.outcome !== undefined
+            ? createElement('span', { style: { color: outcomeColor(step.outcome), fontSize: 10, flexShrink: 0 } }, step.outcome)
+            : null,
+        )
+      }),
+    run.files.length > 0
+      ? createElement('div', null,
+        createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 10, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, `Files observed (${run.files.length})`),
+        createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 4 } },
+          run.files.map((file) => createElement('span', {
+            key: file,
+            title: file,
+            style: {
+              fontSize: 10, color: C.text, background: C.bg, border: `1px solid ${C.border}`,
+              borderRadius: 4, padding: '1px 6px', maxWidth: 240,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             },
-              createElement('span', { style: { color: C.faint, fontSize: 10, minWidth: 22, fontVariantNumeric: 'tabular-nums' } }, `#${step.seq}`),
-              createElement('span', {
-                style: { fontSize: 12, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
-                title: step.childId ?? step.label,
-              }, step.label),
-              step.phase !== undefined
-                ? createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, step.phase)
-                : null,
-              linked.detail !== ''
-                ? createElement('span', { style: { color: linked.color, fontSize: 10, flexShrink: 0 } }, linked.detail.trim())
-                : null,
-              step.outcome !== undefined
-                ? createElement('span', { style: { color: outcomeColor(step.outcome), fontSize: 10, flexShrink: 0 } }, step.outcome)
-                : null,
-            )
-          }),
-        run.files.length > 0
-          ? createElement('div', null,
-            createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 6, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, `Files observed (${run.files.length})`),
-            createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 4 } },
-              run.files.map((file) => createElement('span', {
-                key: file,
-                title: file,
-                style: {
-                  fontSize: 10, color: C.text, background: C.bg, border: `1px solid ${C.border}`,
-                  borderRadius: 4, padding: '1px 6px', maxWidth: 220,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                },
-              }, fileBase(file))),
-            ),
-          )
-          : null,
+          }, fileBase(file))),
+        ),
       )
       : null,
   )
 }
 
-function WorkflowList(props: { state: PillState }): JSX.Element | null {
-  const { state } = props
+function WorkflowList(props: { state: PillState; onOpen: (run: PillWorkflowRun) => void }): JSX.Element | null {
+  const { state, onOpen } = props
   const workflows = state.agent.workflows ?? []
   if (workflows.length === 0) return null
   return createElement('div', null,
-    workflows.map((run) => createElement(WorkflowRow, { key: run.id, run, ts: state.ts, subagents: state.subagents })),
+    workflows.map((run) => createElement(WorkflowRow, { key: run.id, run, ts: state.ts, onOpen })),
   )
 }
 
@@ -537,6 +618,10 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   const { sessions } = props
   const [open, setOpen] = useState(false)
   const [state, setState] = useState<PillState | null>(null)
+  // Detail layer: a pushed view (workflow / subagent) on top of the main
+  // list; back returns. Cleared when the target disappears or on session
+  // switch.
+  const [detail, setDetail] = useState<{ kind: 'workflow'; id: string } | { kind: 'subagent'; id: string } | null>(null)
   const inFlight = useRef(false)
 
   // ── Capsule drag ──
@@ -652,6 +737,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   // Close the popover when switching sessions.
   useEffect(() => {
     setOpen(false)
+    setDetail(null)
   }, [sessionId])
 
   // Popover geometry: anchored to the capsule, flipped to stay in viewport.
@@ -757,6 +843,19 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   const toolName = state?.agent.tool
   const fleet = state?.agents ?? []
   const recentTools = state?.agent.recentTools ?? []
+  // Resolve the detail-layer target against the live snapshot; if it is
+  // gone (list refreshed, run replaced), drop back to the main view.
+  const detailRun = detail !== null && detail.kind === 'workflow'
+    ? (state?.agent.workflows ?? []).find(run => run.id === detail.id)
+    : undefined
+  const detailChild = detail !== null && detail.kind === 'subagent'
+    ? (state?.subagents ?? []).find(child => child.id === detail.id)
+    : undefined
+  useEffect(() => {
+    if (detail !== null && detailRun === undefined && detailChild === undefined && state !== null) {
+      setDetail(null)
+    }
+  }, [detail, detailRun, detailChild, state])
 
   return createElement('div', { ref: rootRef },
     // ── Capsule (draggable; click toggles the popover) ──
@@ -864,24 +963,45 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
             padding: '10px 14px', borderBottom: `1px solid ${C.border}`, flexShrink: 0,
           },
         },
-          createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-            createElement('span', { style: { width: 9, height: 9, borderRadius: 5, background: dotColor } }),
-            createElement('span', { style: { color: C.text, fontSize: 13, fontWeight: 700 } }, 'Agent Activity'),
-            state !== null
-              ? createElement('span', { style: { color: C.faint, fontSize: 10 } }, state.sessionId)
-              : null,
-          ),
+          detail !== null
+            ? createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 } },
+              createElement('button', {
+                onClick: () => setDetail(null),
+                'aria-label': 'Back',
+                title: 'Back',
+                style: { ...iconButtonStyle, fontSize: 13, padding: '2px 9px', flexShrink: 0 },
+              }, '←'),
+              createElement('span', {
+                style: { color: C.text, fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+              }, detail.kind === 'workflow' ? (detailRun?.name ?? 'Workflow') : (detailChild?.label ?? 'Subagent')),
+            )
+            : createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+              createElement('span', { style: { width: 9, height: 9, borderRadius: 5, background: dotColor } }),
+              createElement('span', { style: { color: C.text, fontSize: 13, fontWeight: 700 } }, 'Agent Activity'),
+              state !== null
+                ? createElement('span', { style: { color: C.faint, fontSize: 10 } }, state.sessionId)
+                : null,
+            ),
           createElement('button', {
             onClick: () => setOpen(false), 'aria-label': 'Close', title: 'Close (Esc / Ctrl+Alt+P)',
             style: { ...iconButtonStyle, fontSize: 13, padding: '2px 9px' },
           }, '✕'),
         ),
-        // ── Scrollable body with collapsible sections ──
+        // ── Scrollable body: detail layer (pushed) or the main view ──
         createElement('div', { style: { flex: 1, overflowY: 'auto', padding: '4px 14px 20px' } },
           state === null
             ? createElement('div', { style: { color: C.faint, fontSize: 12, padding: '16px 0' } },
               sessionId === undefined ? 'No active conversation' : 'Loading…')
-            : createElement('div', null,
+            : detail !== null && detail.kind === 'workflow' && detailRun !== undefined
+              ? createElement(WorkflowDetail, { run: detailRun, ts: state.ts, subagents: state.subagents })
+              : detail !== null && detail.kind === 'subagent' && detailChild !== undefined
+                ? createElement(SubagentDetail, {
+                  child: detailChild,
+                  ts: state.ts,
+                  sessionId: state.sessionId,
+                  onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) },
+                })
+                : createElement('div', null,
               // ── Empty-state hiding (v0.6.0): a section renders only when it
               // has real content; the header above always stays. ──
               state.goal !== null
@@ -934,7 +1054,10 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                           color: C.yellow,
                         })
                         : null,
-                      createElement(WorkflowList, { state }),
+                      createElement(WorkflowList, {
+                        state,
+                        onOpen: (run) => setDetail({ kind: 'workflow', id: run.id }),
+                      }),
                     ),
                 )
                 : null,
@@ -947,7 +1070,11 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                   }),
                   collapsed.subagents === true
                     ? null
-                    : createElement(SubagentList, { state, onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) } }),
+                    : createElement(SubagentList, {
+                      state,
+                      onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) },
+                      onOpen: (child) => setDetail({ kind: 'subagent', id: child.id }),
+                    }),
                 )
                 : null,
               state.jobs.length > 0
