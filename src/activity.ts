@@ -120,10 +120,12 @@ export interface ActivityEvent {
 export class ActivityTracker {
   /** Bounded history of the most recent workflow runs. */
   private static readonly WORKFLOW_HISTORY_LIMIT = 5
-  /** Bounded activity-timeline length. */
+  /** Bounded per-session activity-timeline length. */
   private static readonly TIMELINE_LIMIT = 40
   /** File events for the same path within this window merge into one entry. */
   private static readonly FILE_MERGE_MS = 60_000
+  /** Bounded per-session turn history (turn → files). */
+  private static readonly TURN_LIMIT = 10
 
   private readonly subagents = new Map<string, TrackedSubagent>()
   private readonly workflowRuns: TrackedWorkflowRun[] = []
@@ -131,15 +133,27 @@ export class ActivityTracker {
   private activeRun: TrackedWorkflowRun | null = null
   /** How many `agent()` calls the run accepted (host-observed floor). */
   private activeRunAgentsStarted = 0
-  /** The activity feed (newest first). */
-  private readonly timeline: ActivityEvent[] = []
+  /** Per-session activity feeds (newest first). */
+  private readonly timelines = new Map<string, ActivityEvent[]>()
+  /** Per-session turn → path → latest diff. */
+  private readonly turnFiles = new Map<string, Map<number, Map<string, FileDiffRecord>>>()
+  /** Last session that ran a tool (fs events without a session dimension land here). */
+  private lastActiveSession: string | null = null
 
-  /** Push one activity event (newest first, bounded). */
-  private pushActivity(event: ActivityEvent): void {
-    this.timeline.unshift(event)
-    if (this.timeline.length > ActivityTracker.TIMELINE_LIMIT) {
-      this.timeline.length = ActivityTracker.TIMELINE_LIMIT
+  /** Push one activity event (newest first, bounded) for one session. */
+  private pushActivity(sessionId: string, event: ActivityEvent): void {
+    const feed = this.timelines.get(sessionId) ?? []
+    feed.unshift(event)
+    if (feed.length > ActivityTracker.TIMELINE_LIMIT) {
+      feed.length = ActivityTracker.TIMELINE_LIMIT
     }
+    this.timelines.set(sessionId, feed)
+  }
+
+  /** Push an event to the last session that ran a tool (sessionless events). */
+  private pushGlobalActivity(event: ActivityEvent): void {
+    if (this.lastActiveSession === null) return
+    this.pushActivity(this.lastActiveSession, event)
   }
 
   /** Observe one `subagent/start` payload (defensive). */
@@ -149,7 +163,7 @@ export class ActivityTracker {
     const entry = this.subagents.get(id) ?? {}
     entry.startedAt ??= Date.now()
     this.subagents.set(id, entry)
-    this.pushActivity({ kind: 'subagent', ts: Date.now(), text: `subagent ${id.slice(0, 8)} started`, detail: str(info, 'provider') })
+    this.pushGlobalActivity({ kind: 'subagent', ts: Date.now(), text: `subagent ${id.slice(0, 8)} started`, detail: str(info, 'provider') })
   }
 
   /** Observe one `subagent/end` payload (defensive). */
@@ -160,7 +174,7 @@ export class ActivityTracker {
     entry.finishedAt ??= Date.now()
     entry.stopReason = str(info, 'stopReason') ?? entry.stopReason
     this.subagents.set(id, entry)
-    this.pushActivity({ kind: 'subagent', ts: Date.now(), text: `subagent ${id.slice(0, 8)} ended`, detail: entry.stopReason })
+    this.pushGlobalActivity({ kind: 'subagent', ts: Date.now(), text: `subagent ${id.slice(0, 8)} ended`, detail: entry.stopReason })
   }
 
   /** Tracked facts for one child id (empty record when never observed). */
@@ -190,7 +204,7 @@ export class ActivityTracker {
     if (this.workflowRuns.length > ActivityTracker.WORKFLOW_HISTORY_LIMIT) {
       this.workflowRuns.length = ActivityTracker.WORKFLOW_HISTORY_LIMIT
     }
-    this.pushActivity({ kind: 'workflow', ts: Date.now(), text: `workflow ${run.name} started` })
+    this.pushGlobalActivity({ kind: 'workflow', ts: Date.now(), text: `workflow ${run.name} started` })
   }
 
   /** Observe one `workflow/phase` payload: refresh the matching run's phase. */
@@ -201,7 +215,7 @@ export class ActivityTracker {
     if (run === null) return
     run.phase = phase
     if (phase !== null) {
-      this.pushActivity({ kind: 'workflow', ts: Date.now(), text: `workflow ${run.name} → ${phase}` })
+      this.pushGlobalActivity({ kind: 'workflow', ts: Date.now(), text: `workflow ${run.name} → ${phase}` })
     }
   }
 
@@ -241,23 +255,25 @@ export class ActivityTracker {
     if (run === null) return
     run.settled = true
     run.stopReason = str(result, 'stopReason')
-    this.pushActivity({ kind: 'workflow', ts: Date.now(), text: `workflow ${run.name} ended`, detail: run.stopReason })
+    this.pushGlobalActivity({ kind: 'workflow', ts: Date.now(), text: `workflow ${run.name} ended`, detail: run.stopReason })
   }
 
   /** Observe one `fs/observed` payload: feed the timeline unconditionally,
    *  and attribute the file to the active workflow run when one is running. */
   onFsObserved(target: unknown): void {
     const displayPath = str(target, 'displayPath')
-    if (displayPath === undefined) return
-    // Timeline: all file activity counts ("eyes on the internals").
+    if (displayPath === undefined || this.lastActiveSession === null) return
+    // Timeline: all file activity counts ("eyes on the internals"), scoped to
+    // the last session that ran a tool (the feed has no session dimension).
     const now = Date.now()
     const base = displayPath.split(/[\\/]/).pop() ?? displayPath
-    const newest = this.timeline[0]
+    const feed = this.timelines.get(this.lastActiveSession) ?? []
+    const newest = feed[0]
     if (newest !== undefined && newest.kind === 'file' && newest.detail === displayPath && now - newest.ts < ActivityTracker.FILE_MERGE_MS) {
       newest.ts = now
       newest.count = (newest.count ?? 1) + 1
     } else {
-      this.pushActivity({ kind: 'file', ts: now, text: base, detail: displayPath })
+      this.pushActivity(this.lastActiveSession, { kind: 'file', ts: now, text: base, detail: displayPath })
     }
     // Run attribution: only while a workflow run is active.
     const run = this.activeRun
@@ -295,7 +311,7 @@ export class ActivityTracker {
     if (record.type === 'goal/change') {
       const operation = typeof data.operation === 'string' ? data.operation : undefined
       if (operation !== undefined) {
-        this.pushActivity({ kind: 'goal', ts: Date.now(), text: `goal ${operation}` })
+        this.pushActivity(sessionId, { kind: 'goal', ts: Date.now(), text: `goal ${operation}` })
       }
       return
     }
@@ -304,9 +320,10 @@ export class ActivityTracker {
       const name = typeof data.name === 'string' && data.name !== '' ? data.name : undefined
       if (name === undefined) return
       const now = Date.now()
+      this.lastActiveSession = sessionId
       this.toolCalls.set(sessionId, { name, ts: now })
       this.currentTools.set(sessionId, { name, startedAt: now })
-      this.pushActivity({ kind: 'tool', ts: now, text: `tool ${name}` })
+      this.pushActivity(sessionId, { kind: 'tool', ts: now, text: `tool ${name}` })
       return
     }
 
@@ -317,7 +334,7 @@ export class ActivityTracker {
         list.unshift({ name: inFlight.name, durationMs: Date.now() - inFlight.startedAt })
         this.recentTools.set(sessionId, list.slice(0, 5))
         this.currentTools.delete(sessionId)
-        this.pushActivity({
+        this.pushActivity(sessionId, {
           kind: 'tool-done',
           ts: Date.now(),
           text: `tool ${inFlight.name} done`,
@@ -327,22 +344,36 @@ export class ActivityTracker {
       // Result-time contextual diffs (dsh-tool-fs attaches { diffs: FileDiff[] }
       // as meta on write/edit results): { path, oldText|null, newText }.
       // Collected GLOBALLY by path (workflow subagent edits land in the child
-      // session's event stream, but the panel reads them from the parent).
+      // session's event stream, but the panel reads them from the parent),
+      // and aggregated per session × turn for the instruction-tail view.
+      const turn = num(data, 'turn')
       const meta = data.meta
       const diffs = typeof meta === 'object' && meta !== null ? (meta as Record<string, unknown>).diffs : undefined
       if (Array.isArray(diffs)) {
+        const perTurn = turn === undefined ? null : this.turnFiles.get(sessionId) ?? new Map<number, Map<string, FileDiffRecord>>()
         for (const entry of diffs) {
           if (typeof entry !== 'object' || entry === null) continue
           const e = entry as Record<string, unknown>
           const path = typeof e.path === 'string' && e.path !== '' ? e.path : undefined
           const newText = typeof e.newText === 'string' ? e.newText : undefined
           if (path === undefined || newText === undefined) continue
-          this.fileDiffs.set(path, {
+          const record: FileDiffRecord = {
             path,
             oldText: typeof e.oldText === 'string' ? e.oldText : null,
             newText,
             ts: Date.now(),
-          })
+          }
+          this.fileDiffs.set(path, record)
+          if (perTurn !== null && turn !== undefined) {
+            const byPath = perTurn.get(turn) ?? new Map<string, FileDiffRecord>()
+            byPath.set(path, record)
+            perTurn.set(turn, byPath)
+            if (perTurn.size > ActivityTracker.TURN_LIMIT) {
+              const oldest = perTurn.keys().next().value as number | undefined
+              if (oldest !== undefined) perTurn.delete(oldest)
+            }
+            this.turnFiles.set(sessionId, perTurn)
+          }
         }
       }
       return
@@ -402,9 +433,20 @@ export class ActivityTracker {
     return [...this.fileDiffs.values()]
   }
 
-  /** The activity feed (newest first, deep-copied). */
-  timelineOf(): ActivityEvent[] {
-    return this.timeline.map((event) => ({ ...event }))
+  /** The activity feed for one session (newest first, deep-copied). */
+  timelineOf(sessionId: string): ActivityEvent[] {
+    return (this.timelines.get(sessionId) ?? []).map((event) => ({ ...event }))
+  }
+
+  /** Files handled per turn for one session (turns with files, oldest first). */
+  turnsOf(sessionId: string): Array<{ turn: number; files: FileDiffRecord[] }> {
+    const perTurn = this.turnFiles.get(sessionId)
+    if (perTurn === undefined || perTurn.size === 0) return []
+    const turns = [...perTurn.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .filter(([, files]) => files.size > 0)
+      .map(([turn, files]) => ({ turn, files: [...files.values()] }))
+    return turns
   }
 
   /** Queued (inbox) message count for one session. */
