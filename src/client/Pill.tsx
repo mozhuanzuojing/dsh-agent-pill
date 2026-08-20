@@ -1018,13 +1018,22 @@ function PillRoot(): JSX.Element {
   const toolName = state?.agent.tool
   const recentTools = state?.agent.recentTools ?? []
   const timeline = state?.timeline ?? []
-  // Capsule body = the latest activity event (v0.11.0 "single latest"):
-  // a tool call, a file touch, a completion — updates when events arrive;
-  // idle shows AGENT.
+  // Capsule body = the latest activity event while anything is busy
+  // (v0.11.0 "single latest"); idle shows AGENT per the grill consensus.
+  const capsuleBusy = state !== null && (
+    state.agent.status === 'running' || state.agent.tool !== undefined
+    || state.subagents.some(s => s.kind === 'child' && s.activity === 'running')
+    || state.jobs.some(j => j.status === 'running' || j.status === 'stopping')
+    || (state.goal !== null && state.goal.phase !== 'complete')
+    || (state.agent.workflows ?? []).some(run => !run.settled)
+  )
   const latestEvent = timeline[0]
   const nowMs = state?.ts ?? Date.now()
-  const capsuleLabel = latestEvent !== undefined
-    ? `${ACTIVITY_ICON[latestEvent.kind] ?? '·'} ${latestEvent.text}${latestEvent.detail !== undefined ? ` · ${latestEvent.detail}` : ''}`
+  const eventText = latestEvent !== undefined
+    ? latestEvent.text.replace(/^tool /, '') + (latestEvent.detail !== undefined ? ` · ${latestEvent.detail}` : '')
+    : ''
+  const capsuleLabel = latestEvent !== undefined && capsuleBusy
+    ? `${ACTIVITY_ICON[latestEvent.kind] ?? '·'} ${eventText}`
     : 'AGENT'
   const capsuleTitle = latestEvent !== undefined
     ? `${fmtTimeOf(latestEvent.ts)} ${latestEvent.text}${latestEvent.detail !== undefined ? ` · ${latestEvent.detail}` : ''}${latestEvent.count !== undefined && latestEvent.count > 1 ? ` ×${latestEvent.count}` : ''}`
