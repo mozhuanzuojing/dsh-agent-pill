@@ -103,10 +103,27 @@ export interface FileDiffRecord {
   ts: number
 }
 
+/** One activity-timeline event (the "eyes on the internals" feed). */
+export interface ActivityEvent {
+  kind: 'tool' | 'tool-done' | 'file' | 'workflow' | 'subagent' | 'goal'
+  /** Host clock when the event was observed. */
+  ts: number
+  /** Short display text (tool name, file basename, phase title, …). */
+  text: string
+  /** Optional detail (path, duration, stop reason, operation). */
+  detail?: string
+  /** Merge count when the same file repeats within the merge window. */
+  count?: number
+}
+
 /** Process-local activity timeline for the pill panel. */
 export class ActivityTracker {
   /** Bounded history of the most recent workflow runs. */
   private static readonly WORKFLOW_HISTORY_LIMIT = 5
+  /** Bounded activity-timeline length. */
+  private static readonly TIMELINE_LIMIT = 40
+  /** File events for the same path within this window merge into one entry. */
+  private static readonly FILE_MERGE_MS = 60_000
 
   private readonly subagents = new Map<string, TrackedSubagent>()
   private readonly workflowRuns: TrackedWorkflowRun[] = []
@@ -114,6 +131,16 @@ export class ActivityTracker {
   private activeRun: TrackedWorkflowRun | null = null
   /** How many `agent()` calls the run accepted (host-observed floor). */
   private activeRunAgentsStarted = 0
+  /** The activity feed (newest first). */
+  private readonly timeline: ActivityEvent[] = []
+
+  /** Push one activity event (newest first, bounded). */
+  private pushActivity(event: ActivityEvent): void {
+    this.timeline.unshift(event)
+    if (this.timeline.length > ActivityTracker.TIMELINE_LIMIT) {
+      this.timeline.length = ActivityTracker.TIMELINE_LIMIT
+    }
+  }
 
   /** Observe one `subagent/start` payload (defensive). */
   onSubagentStart(info: unknown): void {
@@ -122,6 +149,7 @@ export class ActivityTracker {
     const entry = this.subagents.get(id) ?? {}
     entry.startedAt ??= Date.now()
     this.subagents.set(id, entry)
+    this.pushActivity({ kind: 'subagent', ts: Date.now(), text: `subagent ${id.slice(0, 8)} started`, detail: str(info, 'provider') })
   }
 
   /** Observe one `subagent/end` payload (defensive). */
@@ -132,6 +160,7 @@ export class ActivityTracker {
     entry.finishedAt ??= Date.now()
     entry.stopReason = str(info, 'stopReason') ?? entry.stopReason
     this.subagents.set(id, entry)
+    this.pushActivity({ kind: 'subagent', ts: Date.now(), text: `subagent ${id.slice(0, 8)} ended`, detail: entry.stopReason })
   }
 
   /** Tracked facts for one child id (empty record when never observed). */
@@ -161,6 +190,7 @@ export class ActivityTracker {
     if (this.workflowRuns.length > ActivityTracker.WORKFLOW_HISTORY_LIMIT) {
       this.workflowRuns.length = ActivityTracker.WORKFLOW_HISTORY_LIMIT
     }
+    this.pushActivity({ kind: 'workflow', ts: Date.now(), text: `workflow ${run.name} started` })
   }
 
   /** Observe one `workflow/phase` payload: refresh the matching run's phase. */
@@ -170,6 +200,9 @@ export class ActivityTracker {
     const run = id === undefined ? null : this.runOf(id)
     if (run === null) return
     run.phase = phase
+    if (phase !== null) {
+      this.pushActivity({ kind: 'workflow', ts: Date.now(), text: `workflow ${run.name} → ${phase}` })
+    }
   }
 
   /** Observe one `workflow/agent-start` payload: append a step to the run. */
@@ -208,6 +241,7 @@ export class ActivityTracker {
     if (run === null) return
     run.settled = true
     run.stopReason = str(result, 'stopReason')
+    this.pushActivity({ kind: 'workflow', ts: Date.now(), text: `workflow ${run.name} ended`, detail: run.stopReason })
   }
 
   /** Observe one `fs/observed` payload: attribute the file to the active run. */
@@ -215,8 +249,18 @@ export class ActivityTracker {
     const run = this.activeRun
     if (run === null || run.settled) return
     const displayPath = str(target, 'displayPath')
-    if (displayPath === undefined || run.files.includes(displayPath)) return
-    run.files.push(displayPath)
+    if (displayPath === undefined) return
+    if (!run.files.includes(displayPath)) run.files.push(displayPath)
+    // Activity feed: merge repeats of the same path within the window.
+    const now = Date.now()
+    const newest = this.timeline[0]
+    const base = displayPath.split(/[\\/]/).pop() ?? displayPath
+    if (newest !== undefined && newest.kind === 'file' && newest.detail === displayPath && now - newest.ts < ActivityTracker.FILE_MERGE_MS) {
+      newest.ts = now
+      newest.count = (newest.count ?? 1) + 1
+    } else {
+      this.pushActivity({ kind: 'file', ts: now, text: base, detail: displayPath })
+    }
   }
 
   // ── Per-session live surface: current tool call, token accounting, inbox ──
@@ -246,12 +290,21 @@ export class ActivityTracker {
     const data = typeof record.data === 'object' && record.data !== null ? record.data as Record<string, unknown> : null
     if (data === null) return
 
+    if (record.type === 'goal/change') {
+      const operation = typeof data.operation === 'string' ? data.operation : undefined
+      if (operation !== undefined) {
+        this.pushActivity({ kind: 'goal', ts: Date.now(), text: `goal ${operation}` })
+      }
+      return
+    }
+
     if (record.type === 'tool/call') {
       const name = typeof data.name === 'string' && data.name !== '' ? data.name : undefined
       if (name === undefined) return
       const now = Date.now()
       this.toolCalls.set(sessionId, { name, ts: now })
       this.currentTools.set(sessionId, { name, startedAt: now })
+      this.pushActivity({ kind: 'tool', ts: now, text: `tool ${name}` })
       return
     }
 
@@ -262,6 +315,12 @@ export class ActivityTracker {
         list.unshift({ name: inFlight.name, durationMs: Date.now() - inFlight.startedAt })
         this.recentTools.set(sessionId, list.slice(0, 5))
         this.currentTools.delete(sessionId)
+        this.pushActivity({
+          kind: 'tool-done',
+          ts: Date.now(),
+          text: `tool ${inFlight.name} done`,
+          detail: `${Math.round((Date.now() - inFlight.startedAt) / 1000)}s`,
+        })
       }
       // Result-time contextual diffs (dsh-tool-fs attaches { diffs: FileDiff[] }
       // as meta on write/edit results): { path, oldText|null, newText }.
@@ -339,6 +398,11 @@ export class ActivityTracker {
   /** Result-time file diffs (global by path, newest record per path). */
   fileDiffsOf(): FileDiffRecord[] {
     return [...this.fileDiffs.values()]
+  }
+
+  /** The activity feed (newest first, deep-copied). */
+  timelineOf(): ActivityEvent[] {
+    return this.timeline.map((event) => ({ ...event }))
   }
 
   /** Queued (inbox) message count for one session. */
