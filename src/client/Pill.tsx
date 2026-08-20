@@ -1078,7 +1078,6 @@ function PillRoot(): JSX.Element {
   const inboxCount = state?.agent.inbox ?? 0
   if (inboxCount > 0) counts.push({ value: 'q', color: C.yellow, title: `${inboxCount} queued message${inboxCount > 1 ? 's' : ''}` })
   const toolName = state?.agent.tool
-  const recentTools = state?.agent.recentTools ?? []
   const timeline = state?.timeline ?? []
   // Capsule body = the latest activity event while anything is busy
   // (v0.11.0 "single latest"); idle shows AGENT per the grill consensus.
@@ -1090,7 +1089,6 @@ function PillRoot(): JSX.Element {
     || (state.agent.workflows ?? []).some(run => !run.settled)
   )
   const latestEvent = timeline[0]
-  const nowMs = state?.ts ?? Date.now()
   const eventText = latestEvent !== undefined
     ? latestEvent.text.replace(/^tool /, '') + (latestEvent.detail !== undefined ? ` · ${latestEvent.detail}` : '')
     : ''

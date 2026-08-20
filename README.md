@@ -3,7 +3,7 @@
 DSH (DeepSeek Harness) web plugin: a ZCode-style agent activity pill (top-right status capsule) plus a popover summary panel, toggled with **Ctrl+Alt+P**.
 
 - **host half**: aggregates the current conversation's Goal / Subagents / Agent status / workflow runs / background jobs and exposes a fenced JSON API (`/pill/api`) with full control verbs.
-- **client half**: top-right floating status capsule + popover panel (goal card, workflow history with steps and observed files, subagent tree, job list with output/kill, usage).
+- **client half**: top-right floating status capsule + popover panel (goal card, workflow history with steps and observed files, subagent tree, job list with output/kill).
 
 ## UI behavior
 
@@ -34,7 +34,7 @@ DSH (DeepSeek Harness) web plugin: a ZCode-style agent activity pill (top-right 
 - **Adaptive popover width (v0.9.0)**: the popover width follows its content (clamped 320–520px, viewport-capped) via ResizeObserver; diff rows keep their width (`white-space: pre`) instead of wrapping.
 - **Activity timeline (v0.9.0)**: a new Activity section streams the recent host events (tool calls and completions, file activity with per-path merge counting, workflow phase changes, subagent starts/ends, goal changes; bounded ring of 40) — "eyes on what the agent is doing internally".
 
-## Interaction (v0.11.x, grill-me consensus)
+## Interaction (v0.13.x, grill-me consensus)
 
 The plugin follows Cursor's "files under each instruction" pattern and
 ZCode's task-status visibility:
