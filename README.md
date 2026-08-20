@@ -36,6 +36,29 @@ DSH (DeepSeek Harness) web plugin: a ZCode-style agent activity pill (top-right 
 - **Adaptive popover width (v0.9.0)**: the popover width follows its content (clamped 320–520px, viewport-capped) via ResizeObserver; diff rows keep their width (`white-space: pre`) instead of wrapping.
 - **Activity timeline (v0.9.0)**: a new Activity section streams the recent host events (tool calls and completions, file activity with per-path merge counting, workflow phase changes, subagent starts/ends, goal changes; bounded ring of 40) — "eyes on what the agent is doing internally".
 
+## Three-layer interaction (v0.10.0, grill-me consensus)
+
+The plugin moved from a one-popover surface to three layers, following Cursor's
+"files under each instruction" pattern and ZCode's task-status visibility:
+
+1. **Turn-tail file rows** (`conversation.chat.turnTail`): each user instruction
+   in the conversation shows the **files that instruction handled** (`+N`/`-N`
+   badges, inline diff with changes-only/context toggle, copy path) — Claude
+   Code's "Files changed" pattern, per session × turn.
+2. **Composer dock strip** (`conversation.input.dock`): above the input, a
+   live strip of the current session's activity (current tool with duration +
+   recent timeline entries) — opened/closed by the capsule, which is now the
+   **dock's entry point** (click or Ctrl+Alt+P). The strip's `⌘ console`
+   button opens the console.
+3. **Console popover** (capsule-anchored): slimmed to four sections — Goal,
+   Jobs (with detail layer), Usage, Sessions. Workflow history, subagent trees
+   and the activity section were removed from the popover: their value moved
+   to the turn tails and the dock.
+
+Data is **current-session only**: files are aggregated per `sessionId × turn`
+from `tool/result` diffs; the timeline is per session; sessionless events
+(workflow/subagent/fs) attach to the last active session.
+
 ## Install
 
 ```sh
