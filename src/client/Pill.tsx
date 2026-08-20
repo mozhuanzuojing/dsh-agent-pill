@@ -558,9 +558,9 @@ function WorkflowDetail(props: {
   ts: number
   subagents: PillSubagent[]
   onOpenSubagent: (childId: string) => void
+  onOpenFile: (path: string) => void
 }): JSX.Element {
-  const { run, ts, subagents, onOpenSubagent } = props
-  const [copied, setCopied] = useState<string | null>(null)
+  const { run, ts, subagents, onOpenSubagent, onOpenFile } = props
   const statusColor = run.settled
     ? run.stopReason === 'completed' ? C.green
       : run.stopReason === 'error' ? C.red
@@ -579,12 +579,6 @@ function WorkflowDetail(props: {
       return { detail: ` · ${fmtDur(child.startedAt, child.finishedAt)}`, color: child.stopReason === 'failed' ? C.red : C.faint }
     }
     return { detail: '', color: C.faint }
-  }
-  const copyPath = (path: string): void => {
-    void navigator.clipboard.writeText(path).then(() => {
-      setCopied(path)
-      window.setTimeout(() => setCopied(null), 1200)
-    }).catch(() => { /* clipboard unavailable */ })
   }
   return createElement('div', null,
     createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', marginBottom: 6 } },
@@ -637,14 +631,14 @@ function WorkflowDetail(props: {
         createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 4 } },
           run.files.map((file) => createElement('span', {
             key: file,
-            title: file,
-            onClick: () => copyPath(file),
+            title: `${file} — click for diff`,
+            onClick: () => onOpenFile(file),
             style: {
               fontSize: 10, color: C.text, background: C.bg, border: `1px solid ${C.border}`,
               borderRadius: 4, padding: '1px 6px', maxWidth: 240, cursor: 'pointer',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             },
-          }, copied === file ? '✓ copied' : fileBase(file))),
+          }, fileBase(file))),
         ),
       )
       : null,
@@ -660,6 +654,105 @@ function WorkflowList(props: { state: PillState; onOpen: (run: PillWorkflowRun) 
   )
 }
 
+/* ── File detail: diff rendering ───────────────────────────────────────── */
+
+/** Simple line-level diff (common prefix/suffix + middle multiset match). */
+function diffLines(oldText: string | null, newText: string): Array<{ type: 'same' | 'add' | 'del'; text: string }> {
+  const rows: Array<{ type: 'same' | 'add' | 'del'; text: string }> = []
+  if (oldText === null) {
+    for (const line of newText.split('\n')) rows.push({ type: 'add', text: line })
+    return rows
+  }
+  const a = oldText.split('\n')
+  const b = newText.split('\n')
+  let prefix = 0
+  while (prefix < a.length && prefix < b.length && a[prefix] === b[prefix]) prefix++
+  let suffix = 0
+  while (suffix < a.length - prefix && suffix < b.length - prefix && a[a.length - 1 - suffix] === b[b.length - 1 - suffix]) suffix++
+  const midA = a.slice(prefix, a.length - suffix)
+  const midB = b.slice(prefix, b.length - suffix)
+  const count = new Map<string, number>()
+  for (const line of midA) count.set(line, (count.get(line) ?? 0) + 1)
+  const used = new Map<string, number>()
+  for (const line of midB) {
+    const total = count.get(line) ?? 0
+    const consumed = used.get(line) ?? 0
+    if (consumed < total) {
+      used.set(line, consumed + 1)
+      rows.push({ type: 'same', text: line })
+    } else {
+      rows.push({ type: 'add', text: line })
+    }
+  }
+  for (const line of midA) {
+    const total = count.get(line) ?? 0
+    const consumed = used.get(line) ?? 0
+    if (consumed < total) {
+      used.set(line, consumed + 1)
+      rows.push({ type: 'del', text: line })
+    }
+  }
+  const out: Array<{ type: 'same' | 'add' | 'del'; text: string }> = []
+  for (let i = 0; i < prefix; i++) out.push({ type: 'same', text: a[i] ?? '' })
+  for (const row of rows) out.push(row)
+  for (let i = 0; i < suffix; i++) out.push({ type: 'same', text: a[a.length - suffix + i] ?? '' })
+  return out
+}
+
+/** File detail layer: path, copy, and the collected diff (if any). */
+function FileDetail(props: {
+  path: string
+  ts: number
+  diff: { oldText: string | null; newText: string } | undefined
+}): JSX.Element {
+  const { path, ts, diff } = props
+  const [copied, setCopied] = useState(false)
+  const fileBase = path.split(/[\\/]/).pop() ?? path
+  const copyPath = (): void => {
+    void navigator.clipboard.writeText(path).then(() => {
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1200)
+    }).catch(() => { /* clipboard unavailable */ })
+  }
+  return createElement('div', null,
+    createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', marginBottom: 6 } },
+      createElement('span', { style: { width: 8, height: 8, borderRadius: 4, background: C.purple, flexShrink: 0 } }),
+      createElement('span', {
+        style: { fontSize: 13, color: C.text, fontWeight: 700, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+        title: path,
+      }, fileBase),
+      createElement('button', {
+        onClick: copyPath,
+        'aria-label': 'Copy path',
+        title: 'Copy full path',
+        style: iconButtonStyleSmall,
+      }, copied ? '✓' : 'copy'),
+    ),
+    createElement(Row, { label: 'path', value: path, color: C.faint }),
+    createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 10, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, 'Diff'),
+    diff === undefined
+      ? createElement('div', { style: { color: C.faint, fontSize: 11, padding: '2px 0' } },
+        'no collected diff (file was read or observed, not edited by this host)')
+      : createElement('pre', {
+        style: {
+          margin: '4px 0 0', padding: 8, background: C.bg, border: `1px solid ${C.border}`,
+          borderRadius: 5, fontSize: 11, lineHeight: 1.45, maxHeight: 360, overflow: 'auto',
+        },
+      },
+        diffLines(diff.oldText, diff.newText).map((row, index) => createElement('div', {
+          key: index,
+          style: {
+            color: row.type === 'add' ? C.green : row.type === 'del' ? C.red : C.text,
+            background: row.type === 'add' ? 'rgba(63,185,106,0.08)' : row.type === 'del' ? 'rgba(224,90,90,0.08)' : 'transparent',
+            whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+          },
+        }, `${row.type === 'add' ? '+' : row.type === 'del' ? '-' : ' '} ${row.text}`)),
+      ),
+    createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 8 } },
+      `collected ${fmtAgo(ts, Date.now())} ago`),
+  )
+}
+
 /* ── Root: capsule + popover ───────────────────────────────────────────── */
 
 function PillRoot(props: { sessions: ISessions }): JSX.Element {
@@ -670,7 +763,11 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   // the main list. Back pops one level (two-level navigation: workflow
   // step → subagent → back to the workflow). Cleared on target loss or
   // session switch.
-  type PillLayer = { kind: 'workflow'; id: string } | { kind: 'subagent'; id: string } | { kind: 'job'; id: string }
+  type PillLayer =
+    | { kind: 'workflow'; id: string }
+    | { kind: 'subagent'; id: string }
+    | { kind: 'job'; id: string }
+    | { kind: 'file'; id: string }
   const [layers, setLayers] = useState<PillLayer[]>([])
   const detail = layers.length > 0 ? (layers[layers.length - 1] ?? null) : null
   const pushLayer = (layer: PillLayer): void => {
@@ -706,7 +803,12 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   )
   const sessionId = snapshot.current
 
-  // Poll the aggregated state while a session is current.
+  // State refresh: active mode polls every 1.5s; when everything is idle the
+  // client parks on a host long-poll (`pill/api/poll`) and wakes on activity
+  // (v0.8.0 idle-pause consensus).
+  const [idle, setIdle] = useState(false)
+  const lastVersionRef = useRef(0)
+  const busyRef = useRef(false)
   useEffect(() => {
     if (sessionId === undefined) {
       setState(null)
@@ -714,12 +816,20 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
     }
     const controller = new AbortController()
     let alive = true
-    const tick = async (): Promise<void> => {
+    const loadState = async (): Promise<void> => {
       if (inFlight.current) return
       inFlight.current = true
       try {
         const next = await api.state(sessionId, controller.signal)
-        if (alive) setState(next)
+        if (!alive) return
+        setState(next)
+        const wf = (next.agent.workflows ?? []).find(run => !run.settled)
+        busyRef.current = next.agent.status === 'running' || next.agent.tool !== undefined
+          || next.subagents.some(s => s.kind === 'child' && s.activity === 'running')
+          || next.jobs.some(j => j.status === 'running' || j.status === 'stopping')
+          || (next.goal !== null && next.goal.phase !== 'complete')
+          || wf !== undefined
+        if (!busyRef.current) setIdle(true)
       } catch (error) {
         if (error instanceof PillApiError && error.code === 'network') {
           // Host may be restarting; keep the last snapshot.
@@ -730,14 +840,43 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
         inFlight.current = false
       }
     }
-    void tick()
-    const timer = window.setInterval(() => { void tick() }, 1500)
+    const pollOnce = async (): Promise<void> => {
+      try {
+        const result = await api.poll(sessionId, lastVersionRef.current, controller.signal)
+        if (!alive) return
+        lastVersionRef.current = result.version
+        if (result.dirty) {
+          await loadState()
+          if (busyRef.current) setIdle(false)
+        }
+      } catch {
+        // Poll failure (host restarting): retry the loop after a pause.
+      }
+    }
+    void loadState()
+    if (idle) {
+      let stopped = false
+      let timer = 0
+      const loop = async (): Promise<void> => {
+        while (alive && !stopped) {
+          await pollOnce()
+          if (alive && !busyRef.current && !stopped) {
+            await new Promise<void>(resolve => { timer = window.setTimeout(resolve, 400) })
+          } else {
+            break
+          }
+        }
+      }
+      void loop()
+      return () => { alive = false; stopped = true; window.clearTimeout(timer); controller.abort() }
+    }
+    const timer = window.setInterval(() => { void loadState() }, 1500)
     return () => {
       alive = false
       controller.abort()
       window.clearInterval(timer)
     }
-  }, [sessionId])
+  }, [sessionId, idle])
 
   // Desktop notifications on settlement transitions (tmux-agent-sidebar
   // style): workflow ended, job failed, goal completed. Each id fires once.
@@ -917,6 +1056,25 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   const toolName = state?.agent.tool
   const fleet = state?.agents ?? []
   const recentTools = state?.agent.recentTools ?? []
+  // Capsule live label (v0.8.0): workflow "name·phase" → current tool → AGENT.
+  const nowMs = state?.ts ?? Date.now()
+  const capsuleLabel = runningWorkflow !== undefined
+    ? `${runningWorkflow.name}·${runningWorkflow.phase ?? 'run'}`
+    : toolName !== undefined ? toolName : 'AGENT'
+  const capsuleTitle = runningWorkflow !== undefined
+    ? `workflow ${runningWorkflow.name} · ${runningWorkflow.phase ?? 'running'} · ${fmtDur(runningWorkflow.startedAt, nowMs)}`
+    : toolName !== undefined
+      ? `${toolName} · ${fmtDur(state?.agent.toolSince ?? nowMs, nowMs)}`
+      : 'Agent activity — idle'
+  // Status strip (v0.8.0): one-line "what is happening now" under the header;
+  // clicking jumps to the workflow detail or back to the main view.
+  const statusLine: { text: string; layer: PillLayer | null } | null = runningWorkflow !== undefined
+    ? { text: `⚙ ${runningWorkflow.name} · ${runningWorkflow.phase ?? 'running'} · ${fmtDur(runningWorkflow.startedAt, nowMs)}`, layer: { kind: 'workflow', id: runningWorkflow.id } }
+    : toolName !== undefined
+      ? { text: `⛭ ${toolName} · ${fmtDur(state?.agent.toolSince ?? nowMs, nowMs)}`, layer: null }
+      : goal !== null && goal.phase !== 'complete'
+        ? { text: `🎯 ${goal.phase} · round ${goal.roundsStarted}/${goal.maxGoalRounds}`, layer: null }
+        : null
   // Resolve the top detail-layer target against the live snapshot; if it is
   // gone (list refreshed, run replaced), pop back one level.
   const detailRun = detail !== null && detail.kind === 'workflow'
@@ -928,11 +1086,14 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   const detailJob = detail !== null && detail.kind === 'job'
     ? (state?.jobs ?? []).find(job => job.id === detail.id)
     : undefined
+  const detailFile = detail !== null && detail.kind === 'file'
+    ? (state?.fileDiffs ?? []).find(diff => diff.path === detail.id)
+    : undefined
   useEffect(() => {
-    if (detail !== null && detailRun === undefined && detailChild === undefined && detailJob === undefined && state !== null) {
+    if (detail !== null && detailRun === undefined && detailChild === undefined && detailJob === undefined && detailFile === undefined && state !== null) {
       popLayer()
     }
-  }, [detail, detailRun, detailChild, detailJob, state])
+  }, [detail, detailRun, detailChild, detailJob, detailFile, state])
 
   return createElement('div', { ref: rootRef },
     // ── Capsule (draggable; click toggles the popover) ──
@@ -1004,7 +1165,14 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
           boxShadow: `0 0 6px ${dotColor}`,
         },
       }),
-      createElement('span', { style: { color: C.text, fontSize: 12, fontWeight: 600, letterSpacing: '0.02em' } }, 'AGENT'),
+      // Live label (v0.8.0): workflow "name·phase" → current tool → AGENT.
+      createElement('span', {
+        style: {
+          color: C.text, fontSize: 12, fontWeight: 600, letterSpacing: '0.02em',
+          maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        },
+        title: capsuleTitle,
+      }, capsuleLabel),
       goal !== null && goal.phase !== 'complete'
         ? createElement('span', {
           style: { color: C.faint, fontSize: 10, fontVariantNumeric: 'tabular-nums' },
@@ -1052,7 +1220,8 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                 style: { color: C.text, fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
               }, detail.kind === 'workflow' ? (detailRun?.name ?? 'Workflow')
                 : detail.kind === 'subagent' ? (detailChild?.label ?? 'Subagent')
-                : (detailJob?.label ?? 'Job')),
+                : detail.kind === 'job' ? (detailJob?.label ?? 'Job')
+                : (detailFile?.path.split(/[\\/]/).pop() ?? 'File')),
             )
             : createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
               createElement('span', { style: { width: 9, height: 9, borderRadius: 5, background: dotColor } }),
@@ -1066,6 +1235,21 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
             style: { ...iconButtonStyle, fontSize: 13, padding: '2px 9px' },
           }, '✕'),
         ),
+        // ── Status strip: one-line "what is happening now" (v0.8.0) ──
+        statusLine !== null && detail === null
+          ? createElement('div', {
+            onClick: () => { (statusLine.layer !== null ? pushLayer(statusLine.layer) : clearLayers()) },
+            title: statusLine.layer !== null ? 'Open workflow details' : 'Back to overview',
+            style: {
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '6px 14px', borderBottom: `1px solid ${C.border}`, background: C.panel2,
+              fontSize: 11, color: C.text, cursor: 'pointer', flexShrink: 0,
+            },
+          },
+            createElement('span', { style: { color: C.purple, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 } }, statusLine.text),
+            createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, 'details ›'),
+          )
+          : null,
         // ── Scrollable body: detail layer (pushed) or the main view ──
         createElement('div', {
           key: detail === null ? 'main' : `${detail.kind}:${detail.id}`,
@@ -1083,6 +1267,9 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                 onOpenSubagent: (childId) => {
                   pushLayer({ kind: 'subagent', id: childId })
                 },
+                onOpenFile: (path) => {
+                  pushLayer({ kind: 'file', id: path })
+                },
               })
               : detail !== null && detail.kind === 'subagent' && detailChild !== undefined
                 ? createElement(SubagentDetail, {
@@ -1098,7 +1285,13 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                     ts: state.ts,
                     onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) },
                   })
-                  : createElement('div', null,
+                  : detail !== null && detail.kind === 'file' && detailFile !== undefined
+                    ? createElement(FileDetail, {
+                      path: detailFile.path,
+                      ts: detailFile.ts,
+                      diff: { oldText: detailFile.oldText, newText: detailFile.newText },
+                    })
+                    : createElement('div', null,
               // ── Empty-state hiding (v0.6.0): a section renders only when it
               // has real content; the header above always stays. ──
               state.goal !== null

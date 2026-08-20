@@ -117,6 +117,16 @@ export interface PillJob {
   finishedAt?: number
 }
 
+/** One collected result-time file diff. */
+export interface PillFileDiff {
+  path: string
+  /** Prior content, or null for a new file / an overwrite. */
+  oldText: string | null
+  /** Content after the change. */
+  newText: string
+  ts: number
+}
+
 /** One aggregated state snapshot. */
 export interface PillState {
   sessionId: string
@@ -127,6 +137,7 @@ export interface PillState {
   jobs: PillJob[]
   usage?: PillUsage
   consumed?: PillConsumed
+  fileDiffs?: PillFileDiff[]
   agents?: PillFleetAgent[]
   services: { goals: boolean; subagents: boolean; jobs: boolean; agents: boolean; usage: boolean }
 }
@@ -158,6 +169,9 @@ async function call<T>(method: string, payload: Record<string, unknown>, signal?
 export const api = {
   state: (sessionId: string, signal?: AbortSignal) =>
     call<PillState>('state', { sessionId }, signal),
+  /** Long-poll: resolves when host activity bumps past `since` or after 30s. */
+  poll: (sessionId: string, since: number, signal?: AbortSignal) =>
+    call<{ dirty: boolean; version: number }>('poll', { sessionId, since }, signal),
   goalPause: (sessionId: string, id: string, revision: number) =>
     call<unknown>('goal.pause', { sessionId, id, revision }),
   goalResume: (sessionId: string, id: string, revision: number) =>
