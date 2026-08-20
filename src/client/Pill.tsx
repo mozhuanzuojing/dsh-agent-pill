@@ -1060,7 +1060,6 @@ function PillRoot(): JSX.Element {
   const inboxCount = state?.agent.inbox ?? 0
   if (inboxCount > 0) counts.push({ value: 'q', color: C.yellow, title: `${inboxCount} queued message${inboxCount > 1 ? 's' : ''}` })
   const toolName = state?.agent.tool
-  const fleet = state?.agents ?? []
   const recentTools = state?.agent.recentTools ?? []
   const timeline = state?.timeline ?? []
   // Capsule body = the latest activity event (v0.11.0 "single latest"):
@@ -1329,37 +1328,6 @@ function PillRoot(): JSX.Element {
                         })
                         : null,
                     ),
-                )
-                : null,
-              fleet.length > 0
-                ? createElement('div', null,
-                  createElement(Section, {
-                    title: 'Sessions', count: fleet.length,
-                    onToggle: () => toggleSection('sessions'), collapsed: collapsed.sessions === true,
-                  }),
-                  collapsed.sessions === true
-                    ? null
-                    : fleet.map((entry) => {
-                      const active = entry.status === 'running'
-                      return createElement('div', {
-                        key: entry.id,
-                        style: { display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' },
-                      },
-                        createElement('span', {
-                          style: { width: 7, height: 7, borderRadius: 4, flexShrink: 0, background: active ? C.yellow : C.faint },
-                        }),
-                        createElement('span', {
-                          style: { fontSize: 11, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
-                          title: entry.id,
-                        }, entry.id.slice(0, 22)),
-                        entry.goal !== undefined
-                          ? createElement('span', {
-                            style: { fontSize: 10, color: C.faint, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140 },
-                            title: entry.goal,
-                          }, entry.goal)
-                          : null,
-                      )
-                    }),
                 )
                 : null,
               !state.services.goals || !state.services.subagents || !state.services.jobs
