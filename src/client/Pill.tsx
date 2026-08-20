@@ -158,6 +158,12 @@ function fmtTokens(n: number): string {
   return String(n)
 }
 
+/** HH:MM:SS clock for timeline rows and capsule tooltips. */
+function fmtTimeOf(ts: number): string {
+  const d = new Date(ts)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
+}
+
 /* ── DeepSeek cost estimate (official list prices, USD per 1M tokens) ──── */
 // Source: https://api-docs.deepseek.com/quick_start/pricing — peak hours
 // (Beijing 09:00-12:00, 14:00-18:00) double the price, off-peak halves it.
@@ -806,10 +812,6 @@ function ActivityList(props: { timeline: PillActivityEvent[] }): JSX.Element {
     subagent: { icon: '▸', color: C.blue },
     goal: { icon: '🎯', color: C.yellow },
   }
-  const fmtTime = (ts: number): string => {
-    const d = new Date(ts)
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
-  }
   return createElement('div', null,
     timeline.map((event, index) => {
       const meta = META[event.kind] ?? { icon: '·', color: C.faint }
@@ -821,7 +823,7 @@ function ActivityList(props: { timeline: PillActivityEvent[] }): JSX.Element {
       },
         createElement('span', {
           style: { color: C.faint, fontSize: 9, flexShrink: 0, fontVariantNumeric: 'tabular-nums' },
-        }, fmtTime(event.ts)),
+        }, fmtTimeOf(event.ts)),
         createElement('span', { style: { color: meta.color, fontSize: 11, flexShrink: 0 } }, meta.icon),
         createElement('span', {
           style: { fontSize: 11, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
@@ -847,10 +849,6 @@ function PillRoot(): JSX.Element {
   const sessionId = useSyncExternalStore(
     useMemo(() => (cb: () => void) => pillStore.subscribe(cb), []),
     useMemo(() => () => pillStore.getSessionId(), []),
-  )
-  const dockVisible = useSyncExternalStore(
-    useMemo(() => (cb: () => void) => pillStore.subscribe(cb), []),
-    useMemo(() => () => pillStore.getDockVisible(), []),
   )
   // Detail layer stack: pushed views (job) on top of the console.
   type PillLayer = { kind: 'job'; id: string }
@@ -1064,16 +1062,18 @@ function PillRoot(): JSX.Element {
   const toolName = state?.agent.tool
   const fleet = state?.agents ?? []
   const recentTools = state?.agent.recentTools ?? []
-  // Capsule live label (v0.8.0): workflow "name·phase" → current tool → AGENT.
+  const timeline = state?.timeline ?? []
+  // Capsule body = the latest activity event (v0.11.0 "single latest"):
+  // a tool call, a file touch, a completion — updates when events arrive;
+  // idle shows AGENT.
+  const latestEvent = timeline[0]
   const nowMs = state?.ts ?? Date.now()
-  const capsuleLabel = runningWorkflow !== undefined
-    ? `${runningWorkflow.name}·${runningWorkflow.phase ?? 'run'}`
-    : toolName !== undefined ? toolName : 'AGENT'
-  const capsuleTitle = runningWorkflow !== undefined
-    ? `workflow ${runningWorkflow.name} · ${runningWorkflow.phase ?? 'running'} · ${fmtDur(runningWorkflow.startedAt, nowMs)}`
-    : toolName !== undefined
-      ? `${toolName} · ${fmtDur(state?.agent.toolSince ?? nowMs, nowMs)}`
-      : 'Agent activity — idle'
+  const capsuleLabel = latestEvent !== undefined
+    ? `${ACTIVITY_ICON[latestEvent.kind] ?? '·'} ${latestEvent.text}${latestEvent.detail !== undefined ? ` · ${latestEvent.detail}` : ''}`
+    : 'AGENT'
+  const capsuleTitle = latestEvent !== undefined
+    ? `${fmtTimeOf(latestEvent.ts)} ${latestEvent.text}${latestEvent.detail !== undefined ? ` · ${latestEvent.detail}` : ''}${latestEvent.count !== undefined && latestEvent.count > 1 ? ` ×${latestEvent.count}` : ''}`
+    : 'Agent activity — idle'
   // Resolve the top detail-layer target against the live snapshot; if it is
   // gone (list refreshed, run replaced), pop back one level.
   const detailJob = detail !== null && detail.kind === 'job'
@@ -1096,7 +1096,7 @@ function PillRoot(): JSX.Element {
           event.preventDefault()
           return
         }
-        pillStore.toggleDock()
+        pillStore.toggleConsole()
       },
       onPointerDown: (event: React.PointerEvent<HTMLButtonElement>) => {
         const el = event.currentTarget
@@ -1138,7 +1138,7 @@ function PillRoot(): JSX.Element {
       },
       title: `Agent activity (${counts.map(c => c.title).join(', ') || 'idle'})${toolName !== undefined ? ` — running ${toolName}` : ''} — drag to move, click or Ctrl+Alt+P for panel`,
       'aria-label': 'Agent activity',
-      'aria-pressed': dockVisible,
+      'aria-pressed': consoleOpen,
       style: {
         position: 'fixed', zIndex: 2147483001,
         ...(pos === null ? { top: 14, right: 14 } : { top: pos.y, left: pos.x }),
@@ -1244,7 +1244,19 @@ function PillRoot(): JSX.Element {
                 onAction: () => { /* store polling refreshes automatically */ },
               })
               : createElement('div', null,
-              // ── Console (v0.10.0): Goal / Jobs / Usage / Sessions only. ──
+              // ── Console (v0.11.0): activity timeline first, then the
+              // four control sections. ──
+              timeline.length > 0
+                ? createElement('div', null,
+                  createElement(Section, {
+                    title: 'Activity', count: timeline.length,
+                    onToggle: () => toggleSection('activity'), collapsed: collapsed.activity === true,
+                  }),
+                  collapsed.activity === true
+                    ? null
+                    : createElement(ActivityList, { timeline }),
+                )
+                : null,
               state.goal !== null
                 ? createElement('div', { id: 'pill-sec-goal' },
                   createElement(Section, {
@@ -1360,60 +1372,6 @@ function PillRoot(): JSX.Element {
         ),
       )
       : null,
-  )
-}
-
-/* ── Composer dock strip (conversation.input.dock) ─────────────────────── */
-
-/**
- * The dock strip above the composer: live per-session activity. Hidden when
- * the capsule toggles it off; the expand button opens the console popover.
- * Registered with loose props (the slot runtime composes session/locale
- * faces; this component only reads the shared pill store).
- */
-export function DockBar(props: any): JSX.Element | null {
-  const dockVisible = useSyncExternalStore(
-    useMemo(() => (cb: () => void) => pillStore.subscribe(cb), []),
-    useMemo(() => () => pillStore.getDockVisible(), []),
-  )
-  const state = useSyncExternalStore(
-    useMemo(() => (cb: () => void) => pillStore.subscribe(cb), []),
-    useMemo(() => () => pillStore.getState(), []),
-  )
-  if (!dockVisible || state === null) return null
-  const timeline = state.timeline ?? []
-  const tool = state.agent.tool
-  const toolSince = state.agent.toolSince
-  return createElement('div', {
-    style: {
-      boxSizing: 'border-box', width: '100%', padding: '0 14px', margin: '0 0 4px',
-      display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,
-      fontFamily: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
-    },
-  },
-    createElement('span', {
-      style: {
-        fontSize: 10, color: C.faint, flexShrink: 0, padding: '2px 7px',
-        background: C.panel2, border: `1px solid ${C.border}`, borderRadius: 999,
-      },
-    }, tool !== undefined
-      ? `⛭ ${tool}${toolSince !== undefined ? ` · ${fmtDur(toolSince, Date.now())}` : ''}`
-      : state.agent.status === 'running' ? '⛭ working…' : '⚡ idle'),
-    timeline.slice(0, 4).map((event, index) => createElement('span', {
-      key: index,
-      style: {
-        fontSize: 10, color: C.dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        maxWidth: 180, flexShrink: 0,
-      },
-      title: event.detail ?? event.text,
-    }, `${ACTIVITY_ICON[event.kind] ?? '·'} ${event.text}${event.count !== undefined && event.count > 1 ? ` ×${event.count}` : ''}`)),
-    createElement('div', { style: { flex: 1 } }),
-    createElement('button', {
-      onClick: () => pillStore.setConsoleOpen(true),
-      'aria-label': 'Open console',
-      title: 'Open console (goals, jobs, usage, sessions)',
-      style: iconButtonStyleSmall,
-    }, '⌘ console'),
   )
 }
 

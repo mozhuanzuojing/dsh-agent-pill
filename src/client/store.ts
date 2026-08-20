@@ -11,7 +11,6 @@ type Listener = () => void
 
 let state: PillState | null = null
 let sessionId: string | undefined
-let dockVisible = false
 let consoleOpen = false
 let started = false
 const listeners = new Set<Listener>()
@@ -97,18 +96,11 @@ export function startPillStore(sessionSource: () => string | undefined): void {
 export const pillStore = {
   getState: (): PillState | null => state,
   getSessionId: (): string | undefined => sessionId,
-  getDockVisible: (): boolean => dockVisible,
-  toggleDock: (): void => {
-    dockVisible = !dockVisible
+  getConsoleOpen: (): boolean => consoleOpen,
+  toggleConsole: (): void => {
+    consoleOpen = !consoleOpen
     emit()
   },
-  setDockVisible: (visible: boolean): void => {
-    if (dockVisible !== visible) {
-      dockVisible = visible
-      emit()
-    }
-  },
-  getConsoleOpen: (): boolean => consoleOpen,
   setConsoleOpen: (open: boolean): void => {
     if (consoleOpen !== open) {
       consoleOpen = open

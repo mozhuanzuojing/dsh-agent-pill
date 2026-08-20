@@ -8,18 +8,13 @@ import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type {} from '@deepseek-ai/dsh-client-runtime/client'
 import type { Context } from '@deepseek-ai/cordis'
-import { DockBar, PillRoot, PILL_CSS, TurnTailFiles } from './Pill.tsx'
+import { PillRoot, PILL_CSS, TurnTailFiles } from './Pill.tsx'
 import { pillStore, startPillStore } from './store.ts'
 
-// SlotMap augmentation for the two seats this plugin occupies. Kept local to
+// SlotMap augmentation for the one seat this plugin occupies. Kept local to
 // avoid depending on the conversation package's private contract files.
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
-    'conversation.input.dock': {
-      kind: 'list'
-      scope: 'session-maybe'
-      owner: Record<string, unknown>
-    }
     'conversation.chat.turnTail': {
       kind: 'chain'
       scope: 'session'
@@ -67,13 +62,6 @@ export function apply(ctx: Context): void {
     }
   }, 'dsh-agent-pill: mount')
 
-  // Composer dock strip: live per-session activity above the input.
-  ctx.effect(() => ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
-    name: 'conversation.input.dock',
-    id: 'agent-pill-activity',
-    order: 30,
-  }, DockBar)), 'dsh-agent-pill: input dock')
-
   // Turn-tail file rows: the files each instruction handled.
   ctx.effect(() => ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({
     name: 'conversation.chat.turnTail',
@@ -81,16 +69,12 @@ export function apply(ctx: Context): void {
     inject: () => ({}),
   }, TurnTailFiles)), 'dsh-agent-pill: turn tail')
 
-  // Esc closes the console popover; Ctrl+Alt+P toggles the dock.
+  // Esc closes the console popover; Ctrl+Alt+P toggles it.
   ctx.effect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.ctrlKey && event.altKey && (event.key === 'p' || event.key === 'P')) {
         event.preventDefault()
-        if (pillStore.getConsoleOpen()) {
-          pillStore.setConsoleOpen(false)
-        } else {
-          pillStore.toggleDock()
-        }
+        pillStore.toggleConsole()
       } else if (event.key === 'Escape' && pillStore.getConsoleOpen()) {
         pillStore.setConsoleOpen(false)
       }
