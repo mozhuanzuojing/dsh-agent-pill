@@ -271,6 +271,171 @@ function GoalCard(props: { state: PillState; onAction: () => void }): JSX.Elemen
   )
 }
 
+function SubagentList(props: {
+  state: PillState
+  onAction: () => void
+  onOpen: (child: PillSubagent & { kind: 'child' }) => void
+}): JSX.Element {
+  const { state, onAction, onOpen } = props
+  const children = state.subagents.filter((s): s is PillSubagent & { kind: 'child' } => s.kind === 'child')
+  const diagnostics = state.subagents.filter(s => s.kind === 'diagnostic')
+  if (children.length === 0 && diagnostics.length === 0) {
+    return createElement('div', { style: { color: C.faint, fontSize: 12, padding: '4px 0' } }, 'No subagents')
+  }
+  const stop = (childId: string): void => {
+    void api.subagentInterrupt(state.sessionId, childId)
+      .catch((error: unknown) => console.error('[dsh-agent-pill] interrupt failed:', error))
+      .then(onAction)
+  }
+  return createElement('div', null, [
+    ...children.map((child) => {
+      const now = state.ts
+      const indent = 8 + (child.depth ?? 0) * 14
+      const elapsed = child.startedAt !== undefined
+        ? child.finishedAt !== undefined
+          ? ` · ran ${fmtDur(child.startedAt, child.finishedAt)}`
+          : ` · ${fmtDur(child.startedAt, now)}`
+        : ''
+      const settled = child.stopReason !== undefined ? ` · ${child.stopReason}` : ''
+      const metaColor = child.stopReason === 'failed' ? C.red : C.faint
+      return createElement('div', {
+        key: child.id,
+        onClick: () => onOpen(child),
+        style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', paddingLeft: indent, cursor: 'pointer' },
+        title: child.id,
+      },
+        createElement('span', {
+          style: {
+            width: 7, height: 7, borderRadius: 4, flexShrink: 0,
+            background: child.activity === 'running' ? C.yellow : C.faint,
+          },
+        }),
+        createElement('div', { style: { flex: 1, minWidth: 0 } },
+          createElement('div', {
+            style: { fontSize: 12, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+            title: child.id,
+          }, child.label ?? child.id),
+          createElement('div', { style: { color: metaColor, fontSize: 10 } },
+            `${child.mode ?? 'one-shot'} · ${child.activity ?? 'inactive'}${elapsed}${settled}`),
+        ),
+        createElement('button', {
+          onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+            event.stopPropagation()
+            stop(child.id)
+          },
+          title: `Interrupt ${child.id}`,
+          'aria-label': `Interrupt ${child.id}`,
+          style: iconButtonStyleSmall,
+        }, 'stop'),
+      )
+    }),
+    ...diagnostics.map((d) => createElement('div', {
+      key: d.id, style: { color: C.red, fontSize: 11, padding: '2px 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      title: d.id,
+    }, `unreadable: ${d.reason} (${d.id})`)),
+  ])
+}
+
+/** Subagent detail layer (pushed on top of the main view, back returns). */
+function SubagentDetail(props: {
+  child: PillSubagent
+  ts: number
+  sessionId: string
+  workflows: PillWorkflowRun[]
+  fileDiffs: PillFileDiff[]
+  onOpenWorkflow: (run: PillWorkflowRun) => void
+  onAction: () => void
+}): JSX.Element {
+  const { child, ts, sessionId, workflows, fileDiffs, onOpenWorkflow, onAction } = props
+  const metaColor = child.stopReason === 'failed' ? C.red : C.faint
+  const elapsed = child.startedAt !== undefined
+    ? child.finishedAt !== undefined
+      ? fmtDur(child.startedAt, child.finishedAt)
+      : fmtDur(child.startedAt, ts)
+    : 'unknown'
+  const stop = (): void => {
+    void api.subagentInterrupt(sessionId, child.id)
+      .catch((error: unknown) => console.error('[dsh-agent-pill] interrupt failed:', error))
+      .then(onAction)
+  }
+  // Linkage (v0.12.0): which workflow step ran this child, and that
+  // workflow's touched files (matching the child session id).
+  const linkedStep = workflows.flatMap(run =>
+    run.steps
+      .filter(step => step.childId === child.id)
+      .map(step => ({ run, step })),
+  )[0]
+  const linkedFiles = linkedStep !== undefined
+    ? linkedStep.run.files
+        .map(file => fileDiffs.find(d => d.path === file)
+          ?? fileDiffs.find(d => (d.path.split(/[\\/]/).pop() ?? d.path) === (file.split(/[\\/]/).pop() ?? file)))
+        .filter((d): d is PillFileDiff => d !== undefined)
+    : []
+  return createElement('div', null,
+    createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', marginBottom: 6 } },
+      createElement('span', {
+        style: {
+          width: 8, height: 8, borderRadius: 4, flexShrink: 0,
+          background: child.activity === 'running' ? C.yellow : C.faint,
+        },
+      }),
+      createElement('span', {
+        style: { fontSize: 13, color: C.text, fontWeight: 700, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      }, child.label ?? child.id),
+    ),
+    createElement(Row, { label: 'id', value: child.id, color: C.faint }),
+    createElement(Row, { label: 'mode', value: child.mode ?? 'one-shot', color: C.text }),
+    createElement(Row, { label: 'activity', value: child.activity ?? 'inactive', color: child.activity === 'running' ? C.yellow : metaColor }),
+    child.depth !== undefined
+      ? createElement(Row, { label: 'depth', value: String(child.depth), color: C.text })
+      : null,
+    child.parentId !== undefined
+      ? createElement(Row, { label: 'parent', value: child.parentId, color: C.faint })
+      : null,
+    createElement(Row, { label: 'elapsed', value: elapsed, color: C.text }),
+    child.stopReason !== undefined
+      ? createElement(Row, { label: 'ended', value: child.stopReason, color: metaColor })
+      : null,
+    child.activity === 'running'
+      ? createElement('div', { style: { marginTop: 10 } },
+        createElement(IconButton, { label: 'Stop (interrupt)', onClick: stop, color: C.red }),
+      )
+      : null,
+    linkedStep !== undefined
+      ? createElement('div', null,
+        createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 12, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, 'Workflow step'),
+        createElement('div', {
+          onClick: () => onOpenWorkflow(linkedStep.run),
+          style: {
+            display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', cursor: 'pointer',
+            borderRadius: 6, background: C.panel2, border: `1px solid ${C.border}`,
+          },
+          title: linkedStep.run.id,
+        },
+          createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, `#${linkedStep.step.seq}`),
+          createElement('span', {
+            style: { fontSize: 11, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+          }, linkedStep.run.name),
+          linkedStep.step.phase !== undefined
+            ? createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, linkedStep.step.phase)
+            : null,
+          linkedStep.step.outcome !== undefined
+            ? createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, linkedStep.step.outcome)
+            : null,
+          createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, '›'),
+        ),
+        linkedFiles.length > 0
+          ? createElement('div', null,
+            createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 8, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, 'Workflow files'),
+            linkedFiles.map(file => createElement(FileRow, { key: file.path, diff: file, now: Date.now() })),
+          )
+          : null,
+      )
+      : null,
+  )
+}
+
+/** One job row in the list; click pushes the job detail layer. */
 function JobRow(props: { job: PillJob; now: number; onOpen: (job: PillJob) => void }): JSX.Element {
   const { job, now, onOpen } = props
   const statusColor = job.status === 'running' || job.status === 'stopping' ? C.yellow
@@ -374,6 +539,150 @@ function JobList(props: { state: PillState; onOpen: (job: PillJob) => void }): J
 }
 
 /* ── Workflow history: runs with steps and observed files ──────────────── */
+function WorkflowRow(props: {
+  run: PillWorkflowRun
+  ts: number
+  onOpen: (run: PillWorkflowRun) => void
+}): JSX.Element {
+  const { run, ts, onOpen } = props
+  const statusColor = run.settled
+    ? run.stopReason === 'completed' ? C.green
+      : run.stopReason === 'error' ? C.red
+      : C.dim
+    : C.yellow
+  return createElement('div', {
+    onClick: () => onOpen(run),
+    style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', cursor: 'pointer', borderRadius: 6, background: C.panel2, border: `1px solid ${C.border}`, marginBottom: 4 },
+    title: run.id,
+  },
+    createElement('span', { style: { width: 7, height: 7, borderRadius: 4, background: statusColor, flexShrink: 0 } }),
+    createElement('span', {
+      style: { fontSize: 12, color: C.text, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+    }, run.name),
+    run.files.length > 0
+      ? createElement('span', {
+        style: {
+          fontSize: 10, color: C.purple, border: `1px solid ${C.purple}`, borderRadius: 4,
+          padding: '0 5px', lineHeight: '15px', flexShrink: 0,
+        },
+        title: `${run.files.length} file${run.files.length > 1 ? 's' : ''}`,
+      }, `📄${run.files.length}`)
+      : null,
+    createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } },
+      `${run.settled ? (run.stopReason ?? 'ended') : (run.phase ?? 'starting')} · ${fmtDur(run.startedAt, ts)}`),
+    createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, '›'),
+  )
+}
+
+/** Workflow detail layer (pushed on top of the main view, back returns). */
+function WorkflowDetail(props: {
+  run: PillWorkflowRun
+  ts: number
+  subagents: PillSubagent[]
+  onOpenSubagent: (childId: string) => void
+  fileDiffs: PillFileDiff[]
+}): JSX.Element {
+  const { run, ts, subagents, onOpenSubagent, fileDiffs } = props
+  const statusColor = run.settled
+    ? run.stopReason === 'completed' ? C.green
+      : run.stopReason === 'error' ? C.red
+      : C.dim
+    : C.yellow
+  const outcomeColor = (outcome: string | undefined): string =>
+    outcome === 'completed' ? C.green : outcome === 'failed' ? C.red : outcome === 'cancelled' ? C.dim : C.faint
+  const fileBase = (path: string): string => path.split(/[\\/]/).pop() ?? path
+  // Step ↔ subagent linkage: the step's child session resolves against the
+  // observed subagent rows for duration and terminal color (v0.6.0).
+  const stepMeta = (childId: string | undefined): { detail: string; color: string } => {
+    if (childId === undefined) return { detail: '', color: C.faint }
+    const child = subagents.find(s => s.id === childId)
+    if (child === undefined) return { detail: '', color: C.faint }
+    if (child.startedAt !== undefined && child.finishedAt !== undefined) {
+      return { detail: ` · ${fmtDur(child.startedAt, child.finishedAt)}`, color: child.stopReason === 'failed' ? C.red : C.faint }
+    }
+    return { detail: '', color: C.faint }
+  }
+  return createElement('div', null,
+    createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', marginBottom: 6 } },
+      createElement('span', { style: { width: 8, height: 8, borderRadius: 4, background: statusColor, flexShrink: 0 } }),
+      createElement('span', { style: { fontSize: 13, color: C.text, fontWeight: 700, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, run.name),
+    ),
+    createElement(Row, { label: 'id', value: run.id, color: C.faint }),
+    createElement(Row, {
+      label: 'status',
+      value: run.settled ? (run.stopReason ?? 'ended') : (run.phase ?? 'running'),
+      color: statusColor,
+    }),
+    createElement(Row, { label: 'elapsed', value: fmtDur(run.startedAt, ts), color: C.text }),
+    createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 10, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, `Steps (${run.steps.length})`),
+    run.steps.length === 0
+      ? createElement('div', { style: { color: C.faint, fontSize: 11, padding: '2px 0' } }, 'no agent calls observed')
+      : run.steps.map((step) => {
+        const linked = stepMeta(step.childId)
+        const linkable = step.childId !== undefined && subagents.some(s => s.id === step.childId)
+        return createElement('div', {
+          key: step.seq,
+          onClick: linkable ? () => onOpenSubagent(step.childId as string) : undefined,
+          style: {
+            display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0',
+            ...(linkable ? { cursor: 'pointer' } : {}),
+          },
+          title: linkable ? 'Open subagent detail' : (step.childId ?? step.label),
+        },
+          createElement('span', { style: { color: C.faint, fontSize: 10, minWidth: 22, fontVariantNumeric: 'tabular-nums' } }, `#${step.seq}`),
+          createElement('span', {
+            style: { fontSize: 12, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+          }, step.label),
+          step.phase !== undefined
+            ? createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, step.phase)
+            : null,
+          linked.detail !== ''
+            ? createElement('span', { style: { color: linked.color, fontSize: 10, flexShrink: 0 } }, linked.detail.trim())
+            : null,
+          step.outcome !== undefined
+            ? createElement('span', { style: { color: outcomeColor(step.outcome), fontSize: 10, flexShrink: 0 } }, step.outcome)
+            : null,
+          linkable
+            ? createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, '›')
+            : null,
+        )
+      }),
+    run.files.length > 0
+      ? createElement('div', null,
+        createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 10, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, `Files (${run.files.length})`),
+        run.files.map((file) => {
+          // The fs feed reports absolute display paths, while tool/result
+          // diffs carry the model-facing path (relative to the workspace) —
+          // match exactly first, then by basename.
+          const base = file.split(/[\\/]/).pop() ?? file
+          const diff = fileDiffs.find(d => d.path === file)
+            ?? fileDiffs.find(d => (d.path.split(/[\\/]/).pop() ?? d.path) === base)
+          if (diff === undefined) {
+            // File observed but no collected diff (read-only activity).
+            return createElement('div', { key: file, style: { display: 'flex', alignItems: 'center', gap: 8, padding: '3px 4px' } },
+              createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, '·'),
+              createElement('span', {
+                style: { fontSize: 11, color: C.faint, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+                title: file,
+              }, fileBase(file)),
+            )
+          }
+          return createElement(FileRow, { key: file, diff, now: ts })
+        }),
+      )
+      : null,
+  )
+}
+
+function WorkflowList(props: { state: PillState; onOpen: (run: PillWorkflowRun) => void }): JSX.Element | null {
+  const { state, onOpen } = props
+  const workflows = state.agent.workflows ?? []
+  if (workflows.length === 0) return null
+  return createElement('div', null,
+    workflows.map((run) => createElement(WorkflowRow, { key: run.id, run, ts: state.ts, onOpen })),
+  )
+}
+
 /* ── File detail: diff rendering ───────────────────────────────────────── */
 
 /** Simple line-level diff (common prefix/suffix + middle multiset match). */
@@ -556,8 +865,11 @@ function PillRoot(): JSX.Element {
     useMemo(() => (cb: () => void) => pillStore.subscribe(cb), []),
     useMemo(() => () => pillStore.getSessionId(), []),
   )
-  // Detail layer stack: pushed views (job) on top of the console.
-  type PillLayer = { kind: 'job'; id: string }
+  // Detail layer stack: pushed views (workflow / subagent / job).
+  type PillLayer =
+    | { kind: 'workflow'; id: string }
+    | { kind: 'subagent'; id: string }
+    | { kind: 'job'; id: string }
   const [layers, setLayers] = useState<PillLayer[]>([])
   const detail = layers.length > 0 ? (layers[layers.length - 1] ?? null) : null
   const pushLayer = (layer: PillLayer): void => {
@@ -790,14 +1102,20 @@ function PillRoot(): JSX.Element {
     : 'Agent activity — idle'
   // Resolve the top detail-layer target against the live snapshot; if it is
   // gone (list refreshed, run replaced), pop back one level.
+  const detailRun = detail !== null && detail.kind === 'workflow'
+    ? (state?.agent.workflows ?? []).find(run => run.id === detail.id)
+    : undefined
+  const detailChild = detail !== null && detail.kind === 'subagent'
+    ? (state?.subagents ?? []).find(child => child.id === detail.id)
+    : undefined
   const detailJob = detail !== null && detail.kind === 'job'
     ? (state?.jobs ?? []).find(job => job.id === detail.id)
     : undefined
   useEffect(() => {
-    if (detail !== null && detailJob === undefined && state !== null) {
+    if (detail !== null && detailRun === undefined && detailChild === undefined && detailJob === undefined && state !== null) {
       popLayer()
     }
-  }, [detail, detailJob, state])
+  }, [detail, detailRun, detailChild, detailJob, state])
 
   return createElement('div', { ref: rootRef },
     // ── Capsule (draggable; click toggles the composer dock strip) ──
@@ -922,7 +1240,9 @@ function PillRoot(): JSX.Element {
               }, '←'),
               createElement('span', {
                 style: { color: C.text, fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
-              }, detail.kind === 'job' ? (detailJob?.label ?? 'Job') : ''),
+              }, detail.kind === 'workflow' ? (detailRun?.name ?? 'Workflow')
+                : detail.kind === 'subagent' ? (detailChild?.label ?? 'Subagent')
+                : (detailJob?.label ?? 'Job')),
             )
             : createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
               createElement('span', { style: { width: 9, height: 9, borderRadius: 5, background: dotColor } }),
@@ -950,33 +1270,86 @@ function PillRoot(): JSX.Element {
           state === null
             ? createElement('div', { style: { color: C.faint, fontSize: 12, padding: '16px 0' } },
               sessionId === undefined ? 'No active conversation' : 'Loading…')
-            : detail !== null && detail.kind === 'job' && detailJob !== undefined
-              ? createElement(JobDetail, {
-                job: detailJob,
-                sessionId: state.sessionId,
+            : detail !== null && detail.kind === 'workflow' && detailRun !== undefined
+              ? createElement(WorkflowDetail, {
+                run: detailRun,
                 ts: state.ts,
-                onAction: () => { /* store polling refreshes automatically */ },
+                subagents: state.subagents,
+                onOpenSubagent: (childId) => {
+                  pushLayer({ kind: 'subagent', id: childId })
+                },
+                fileDiffs: state.fileDiffs ?? [],
               })
-              : createElement('div', null,
+              : detail !== null && detail.kind === 'subagent' && detailChild !== undefined
+                ? createElement(SubagentDetail, {
+                  child: detailChild,
+                  ts: state.ts,
+                  sessionId: state.sessionId,
+                  workflows: state.agent.workflows ?? [],
+                  fileDiffs: state.fileDiffs ?? [],
+                  onOpenWorkflow: (run) => {
+                    setLayerAnim('in')
+                    setLayers(prev => [...prev, { kind: 'workflow', id: run.id }])
+                  },
+                  onAction: () => { /* store polling refreshes automatically */ },
+                })
+                : detail !== null && detail.kind === 'job' && detailJob !== undefined
+                  ? createElement(JobDetail, {
+                    job: detailJob,
+                    sessionId: state.sessionId,
+                    ts: state.ts,
+                    onAction: () => { /* store polling refreshes automatically */ },
+                  })
+                  : createElement('div', null,
               // ── Console (v0.11.0): activity timeline first, then the
               // four control sections. ──
               timeline.length > 0
                 ? createElement('div', null,
                   createElement(Section, {
                     title: 'Activity', count: timeline.length,
-                    onToggle: () => toggleSection('activity'), collapsed: collapsed.activity === true,
+                    onToggle: () => toggleSection('activity'), collapsed: collapsed.activity !== false,
                   }),
-                  collapsed.activity === true
+                  collapsed.activity !== false
                     ? null
                     : createElement(ActivityList, { timeline }),
+                )
+                : null,
+              (state.agent.workflows ?? []).length > 0
+                ? createElement('div', null,
+                  createElement(Section, {
+                    title: 'Workflow', count: (state.agent.workflows ?? []).length,
+                    onToggle: () => toggleSection('workflow'), collapsed: collapsed.workflow !== false,
+                  }),
+                  collapsed.workflow !== false
+                    ? null
+                    : createElement(WorkflowList, {
+                      state,
+                      onOpen: (run) => pushLayer({ kind: 'workflow', id: run.id }),
+                    }),
+                )
+                : null,
+              state.subagents.filter(s => s.kind === 'child').length > 0
+                ? createElement('div', null,
+                  createElement(Section, {
+                    title: 'Subagents',
+                    count: state.subagents.filter(s => s.kind === 'child').length,
+                    onToggle: () => toggleSection('subagents'), collapsed: collapsed.subagents !== false,
+                  }),
+                  collapsed.subagents !== false
+                    ? null
+                    : createElement(SubagentList, {
+                      state,
+                      onAction: () => { /* store polling refreshes automatically */ },
+                      onOpen: (child) => pushLayer({ kind: 'subagent', id: child.id }),
+                    }),
                 )
                 : null,
               state.goal !== null
                 ? createElement('div', { id: 'pill-sec-goal' },
                   createElement(Section, {
-                    title: 'Goal', onToggle: () => toggleSection('goal'), collapsed: collapsed.goal === true,
+                    title: 'Goal', onToggle: () => toggleSection('goal'), collapsed: collapsed.goal !== false,
                   }),
-                  collapsed.goal === true
+                  collapsed.goal !== false
                     ? null
                     : createElement(GoalCard, { state, onAction: () => { /* store polling refreshes automatically */ } }),
                 )
@@ -985,9 +1358,9 @@ function PillRoot(): JSX.Element {
                 ? createElement('div', null,
                   createElement(Section, {
                     title: 'Jobs', count: state.jobs.length,
-                    onToggle: () => toggleSection('jobs'), collapsed: collapsed.jobs === true,
+                    onToggle: () => toggleSection('jobs'), collapsed: collapsed.jobs !== false,
                   }),
-                  collapsed.jobs === true
+                  collapsed.jobs !== false
                     ? null
                     : createElement(JobList, {
                       state,
