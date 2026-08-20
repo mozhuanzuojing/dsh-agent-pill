@@ -1307,9 +1307,9 @@ function PillRoot(): JSX.Element {
                 ? createElement('div', null,
                   createElement(Section, {
                     title: 'Activity', count: timeline.length,
-                    onToggle: () => toggleSection('activity'), collapsed: collapsed.activity !== false,
+                    onToggle: () => toggleSection('activity'), collapsed: collapsed.activity === true,
                   }),
-                  collapsed.activity !== false
+                  collapsed.activity === true
                     ? null
                     : createElement(ActivityList, { timeline }),
                 )
@@ -1318,9 +1318,9 @@ function PillRoot(): JSX.Element {
                 ? createElement('div', null,
                   createElement(Section, {
                     title: 'Workflow', count: (state.agent.workflows ?? []).length,
-                    onToggle: () => toggleSection('workflow'), collapsed: collapsed.workflow !== false,
+                    onToggle: () => toggleSection('workflow'), collapsed: collapsed.workflow === true,
                   }),
-                  collapsed.workflow !== false
+                  collapsed.workflow === true
                     ? null
                     : createElement(WorkflowList, {
                       state,
@@ -1333,9 +1333,9 @@ function PillRoot(): JSX.Element {
                   createElement(Section, {
                     title: 'Subagents',
                     count: state.subagents.filter(s => s.kind === 'child').length,
-                    onToggle: () => toggleSection('subagents'), collapsed: collapsed.subagents !== false,
+                    onToggle: () => toggleSection('subagents'), collapsed: collapsed.subagents === true,
                   }),
-                  collapsed.subagents !== false
+                  collapsed.subagents === true
                     ? null
                     : createElement(SubagentList, {
                       state,
@@ -1347,9 +1347,9 @@ function PillRoot(): JSX.Element {
               state.goal !== null
                 ? createElement('div', { id: 'pill-sec-goal' },
                   createElement(Section, {
-                    title: 'Goal', onToggle: () => toggleSection('goal'), collapsed: collapsed.goal !== false,
+                    title: 'Goal', onToggle: () => toggleSection('goal'), collapsed: collapsed.goal === true,
                   }),
-                  collapsed.goal !== false
+                  collapsed.goal === true
                     ? null
                     : createElement(GoalCard, { state, onAction: () => { /* store polling refreshes automatically */ } }),
                 )
@@ -1358,9 +1358,9 @@ function PillRoot(): JSX.Element {
                 ? createElement('div', null,
                   createElement(Section, {
                     title: 'Jobs', count: state.jobs.length,
-                    onToggle: () => toggleSection('jobs'), collapsed: collapsed.jobs !== false,
+                    onToggle: () => toggleSection('jobs'), collapsed: collapsed.jobs === true,
                   }),
-                  collapsed.jobs !== false
+                  collapsed.jobs === true
                     ? null
                     : createElement(JobList, {
                       state,
