@@ -479,7 +479,7 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
       const toolSince = tracker.toolSinceOf(sessionId)
       const recentTools = tracker.recentToolsOf(sessionId)
       const inbox = tracker.inboxCountOf(sessionId)
-      const fileDiffs = tracker.fileDiffsOf(sessionId)
+      const fileDiffs = tracker.fileDiffsOf()
       // Global agent fleet (tasklight / tmux-agent-sidebar style overview):
       // every live agent with its status and goal objective snippet.
       const fleet = agents !== undefined

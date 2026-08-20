@@ -227,7 +227,7 @@ export class ActivityTracker {
   /** Recently completed tools: {name, durationMs}, newest first (bounded). */
   private readonly recentTools = new Map<string, Array<{ name: string; durationMs: number }>>()
   /** Result-time file diffs per session: path → latest record. */
-  private readonly fileDiffs = new Map<string, Map<string, FileDiffRecord>>()
+  private readonly fileDiffs = new Map<string, FileDiffRecord>()
   private readonly usage = new Map<string, SessionUsage>()
   private readonly inboxCounts = new Map<string, number>()
 
@@ -265,24 +265,24 @@ export class ActivityTracker {
       }
       // Result-time contextual diffs (dsh-tool-fs attaches { diffs: FileDiff[] }
       // as meta on write/edit results): { path, oldText|null, newText }.
+      // Collected GLOBALLY by path (workflow subagent edits land in the child
+      // session's event stream, but the panel reads them from the parent).
       const meta = data.meta
       const diffs = typeof meta === 'object' && meta !== null ? (meta as Record<string, unknown>).diffs : undefined
       if (Array.isArray(diffs)) {
-        const perFile = this.fileDiffs.get(sessionId) ?? new Map<string, FileDiffRecord>()
         for (const entry of diffs) {
           if (typeof entry !== 'object' || entry === null) continue
           const e = entry as Record<string, unknown>
           const path = typeof e.path === 'string' && e.path !== '' ? e.path : undefined
           const newText = typeof e.newText === 'string' ? e.newText : undefined
           if (path === undefined || newText === undefined) continue
-          perFile.set(path, {
+          this.fileDiffs.set(path, {
             path,
             oldText: typeof e.oldText === 'string' ? e.oldText : null,
             newText,
             ts: Date.now(),
           })
         }
-        this.fileDiffs.set(sessionId, perFile)
       }
       return
     }
@@ -336,9 +336,9 @@ export class ActivityTracker {
     return { ...(this.usage.get(sessionId) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }) }
   }
 
-  /** Result-time file diffs for one session (path → latest record). */
-  fileDiffsOf(sessionId: string): FileDiffRecord[] {
-    return [...(this.fileDiffs.get(sessionId)?.values() ?? [])]
+  /** Result-time file diffs (global by path, newest record per path). */
+  fileDiffsOf(): FileDiffRecord[] {
+    return [...this.fileDiffs.values()]
   }
 
   /** Queued (inbox) message count for one session. */

@@ -1001,6 +1001,18 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
       return next
     })
   }
+  // Status-strip jump: expand the section and scroll it into view inside the
+  // popover body (v0.8.0 consensus: the strip is clickable navigation).
+  const jumpToSection = (key: string): void => {
+    setCollapsed(prev => {
+      const next = { ...prev, [key]: false }
+      try { window.localStorage.setItem(SECTION_KEY, JSON.stringify(next)) } catch { /* private mode */ }
+      return next
+    })
+    window.setTimeout(() => {
+      document.getElementById(`pill-sec-${key}`)?.scrollIntoView({ block: 'nearest' })
+    }, 0)
+  }
 
   // Activity summary driving the capsule.
   const goal = state?.goal ?? null
@@ -1238,8 +1250,16 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
         // ── Status strip: one-line "what is happening now" (v0.8.0) ──
         statusLine !== null && detail === null
           ? createElement('div', {
-            onClick: () => { (statusLine.layer !== null ? pushLayer(statusLine.layer) : clearLayers()) },
-            title: statusLine.layer !== null ? 'Open workflow details' : 'Back to overview',
+            onClick: () => {
+              if (statusLine.layer !== null) {
+                pushLayer(statusLine.layer)
+              } else if (toolName !== undefined) {
+                jumpToSection('agent')
+              } else if (goal !== null && goal.phase !== 'complete') {
+                jumpToSection('goal')
+              }
+            },
+            title: statusLine.layer !== null ? 'Open workflow details' : 'Jump to section',
             style: {
               display: 'flex', alignItems: 'center', gap: 6,
               padding: '6px 14px', borderBottom: `1px solid ${C.border}`, background: C.panel2,
@@ -1295,7 +1315,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
               // ── Empty-state hiding (v0.6.0): a section renders only when it
               // has real content; the header above always stays. ──
               state.goal !== null
-                ? createElement('div', null,
+                ? createElement('div', { id: 'pill-sec-goal' },
                   createElement(Section, {
                     title: 'Goal', onToggle: () => toggleSection('goal'), collapsed: collapsed.goal === true,
                   }),
@@ -1305,7 +1325,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                 )
                 : null,
               state.agent.status !== 'absent' || state.agent.tool !== undefined || (state.agent.inbox ?? 0) > 0 || (state.agent.workflows ?? []).length > 0
-                ? createElement('div', null,
+                ? createElement('div', { id: 'pill-sec-agent' },
                   createElement(Section, {
                     title: 'Agent', onToggle: () => toggleSection('agent'), collapsed: collapsed.agent === true,
                   }),
