@@ -8,7 +8,7 @@ DSH (DeepSeek Harness) web plugin: a ZCode-style agent activity pill (top-right 
 ## UI behavior
 
 - **Tooltip-style popover (v0.4.0)**: the panel expands as a light popover anchored to the capsule — no fixed right-side drawer. It flips across all four viewport edges to stay fully on screen, clamps to `min(360px, viewport)` wide and ~70vh tall with inner scrolling, and closes on outside click, Esc, or the shortcut.
-- **Collapsible sections (v0.4.0)**: Goal / Agent / Subagents / Jobs / Usage headers toggle their content; collapsed state is remembered in `localStorage`.
+- **Collapsible sections (v0.4.0)**: Goal / Agent / Subagents / Jobs headers toggle their content; collapsed state is remembered in `localStorage` (v0.13.0: sections default **expanded** — the capsule sees everything at a glance).
 - **Draggable capsule**: drag the pill to any screen edge; the seat persists in `localStorage` across reloads and stays clamped to the viewport on window resize.
 - **Auto light/dark theme**: the palette is driven by CSS variables that follow the DSH theme signal (`<body data-ds-dark-theme>`), so the capsule and panel switch between the white and the dark ("moon night") scheme instantly — including `system` mode following the OS.
 - **Shortcut**: Ctrl+Alt+P toggles the panel (click also works).
@@ -17,16 +17,14 @@ DSH (DeepSeek Harness) web plugin: a ZCode-style agent activity pill (top-right 
 - **Workflow history (v0.4.0)**: the most recent workflow runs (bounded ring of 5) are listed under Agent. Each run expands to show its **steps** (each `agent()` call: seq, label, phase, outcome) and the **files observed** while the run was active (from the host's `fs/observed` feed, deduped, attributed at run level — the feed has no session dimension). Settled runs keep their details until replaced.
 - **Jobs as step entries (v0.4.0)**: each background job is rendered as a single step entry (status, output summary, timing) — jobs have no structured steps, so no file extraction is attempted.
 - **Subagent tree (v0.3.0)**: descendants are indented by depth, and each row shows its **run duration** and **terminal stop reason** (failed settles render red) — timestamps come from the host's `subagent/start` / `subagent/end` observation, since the durable listing carries none.
-- **Usage section (v0.3.0)**: when the host mounts `tokenMeter`, the panel shows the session's current token pressure, surface, and signed surface delta (measured at most every 10s).
-- **Context pressure bar (v0.5.0)**: the Usage section leads with a progress bar of the current context pressure (threshold colors: green <60%, yellow <85%, red <95%, rainbow beyond; the window is assumed ~200k tokens when unknown), plus a **cost estimate** row — accumulated adapter-reported token accounting (`input` / `output` / `cacheRead` / `cacheWrite` from message-step `usage`) priced with DeepSeek's official list prices and the Beijing-time peak/off-peak multiplier.
+- **Usage section (v0.3.0–v0.12.0, removed)**: previously showed the session's token pressure and cost estimate; removed in v0.12.0 along with the Sessions fleet view — the pill now shows only what exists for the current session.
 - **Live tool call (v0.5.0)**: the current session's latest `tool-call` block name is shown under Agent and in the capsule tooltip while running (from the session event feed).
 - **Queued message badge (v0.5.0)**: `agent/inbox` events keep a per-session queued-message count; the capsule shows a `q` badge and the Agent section a queued row (Cursor's queued-messages idea).
 - **Completion notifications (v0.5.0)**: browser notifications fire once per event when a workflow settles, a background job fails, or a goal completes (permission requested lazily).
-- **Sessions overview (v0.5.0)**: the panel lists every live agent on the host (`ctx.agents.list()`) with a status dot and goal snippet — a fleet view in the style of tasklight / tmux-agent-sidebar.
 - **Tool durations (v0.6.0)**: the current tool row shows how long it has been running (`pwsh · 12s`, from `tool/call` / `tool/result` pairing — DSH executes tools serially, so a single in-flight slot pairs them), and recently completed tools appear as duration chips under the Agent section.
 - **Real context window (v0.6.0)**: the pressure bar uses the resolved model context window (`llm.resolveModelInfo` on the current default model selection, 60s cache) when available, falling back to the assumed ~200k.
 - **Step ↔ subagent linkage (v0.6.0)**: workflow step rows resolve their `childId` against the observed subagent rows and show the child's run duration and terminal color.
-- **Empty-state hiding (v0.6.0)**: a section renders only when it has real content — Goal without a goal, Subagents without children, Jobs without entries, Usage when unavailable, Sessions without agents, and an Agent section with nothing to say are all hidden entirely.
+- **Empty-state hiding (v0.6.0)**: a section renders only when it has real content — Goal without a goal, Subagents without children, Jobs without entries, and an Agent section with nothing to say are all hidden entirely. Together with v0.13.0's default-expanded sections, the capsule shows **everything that exists and nothing that doesn't**.
 - **Detail layers (v0.7.0)**: clicking a workflow run or a subagent row **pushes a new detail layer** inside the popover (back button in the header) instead of expanding in place — the workflow detail shows its full steps with subagent durations and observed files, the subagent detail shows its identity, mode, timing, terminal state and a stop control. The layer auto-returns when the target disappears and resets on session switch.
 - **Live capsule label (v0.8.0)**: the capsule text becomes the running workflow's `name·phase`, falls back to the current tool name, then to `AGENT` — what the agent is doing is now visible without opening anything.
 - **Status strip (v0.8.0)**: the popover header is followed by a one-line "what is happening now" (workflow phase / tool / goal round) that clicks through to the workflow detail.
@@ -46,15 +44,16 @@ ZCode's task-status visibility:
    badges, inline diff with changes-only/context toggle, copy path) — Claude
    Code's "Files changed" pattern, per session × turn.
 2. **Capsule = activity strip**: the pill itself shows the **latest activity
-   event** while anything is busy (`⛭ write · 0s`, `✎ Pill.tsx`, `✓ edit done`)
-   and falls back to `AGENT` when idle (click or Ctrl+Alt+P toggles the
-   popover; drag to move).
+   event** while anything is busy (`⛭ write · 0s`, `✎ Pill.tsx`, `✓ edit done`);
+   when fully idle it shrinks to a **bare dot** (v0.13.0 experiment — drag and
+   click still work) and regrows on the next activity. Click or Ctrl+Alt+P
+   toggles the popover; drag to move.
 3. **Popover** (capsule-anchored): the **activity timeline** (full feed, first
    screen) followed by the console sections — **Workflow** (recent runs with
    file-count badges; detail layer with steps and inline file diffs),
    **Subagents** (descendant tree; detail layer with a link to the workflow
    step that ran the child and that workflow's files), **Goal** and **Jobs**
-   (with job detail layer). All sections default collapsed and remember their
+   (with job detail layer). All sections default expanded and remember their
    state in `localStorage`.
 
 Data is **current-session only**: files are aggregated per `sessionId × turn`
@@ -77,8 +76,6 @@ dsh plugin --profile web add dsh-agent-pill
 | Agent | `ctx.agents.get(id)?.status` + `agent/status` events (`idle` / `running`); live `tool-call` block from the session event feed; `agent/inbox` queued-message count | read-only |
 | Workflow | `workflow/start` / `workflow/phase` / `workflow/agent-start` / `workflow/agent-end` / `workflow/end` events (bounded history of 5 runs, each with steps); files from the global `fs/observed` feed while a run is active | read-only |
 | Jobs | `ctx.jobs.list(caller)` + `onJobsChanged` invalidation (single step entry per job) | `jobs.kill` (registry stock API); `jobs.output` (event replay, never consumes the model's cursor) |
-| Usage | `ctx.tokenMeter.measure(session)` (throttled to 10s) + accumulated message-step `usage` accounting (input / output / cache) with DeepSeek price estimate | read-only |
-| Sessions | `ctx.agents.list()` (global fleet: id, status, goal snippet) | read-only |
 
 ## API routes
 
