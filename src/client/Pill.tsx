@@ -1176,32 +1176,36 @@ function PillRoot(): JSX.Element {
         ...(pos === null ? { top: 14, right: 14 } : { top: pos.y, left: pos.x }),
         display: 'flex', alignItems: 'center', gap: 8,
         background: C.panel, border: `1px solid ${C.border}`, borderRadius: 999,
-        padding: '6px 12px', cursor: dragging ? 'grabbing' : 'grab',
+        // v0.13.0: idle shrinks to a dot (experiment); busy shows the full strip.
+        padding: capsuleBusy ? '6px 12px' : '4px', cursor: dragging ? 'grabbing' : 'grab',
         boxShadow: 'var(--pill-shadow)',
         touchAction: 'none', userSelect: 'none', WebkitUserSelect: 'none',
       },
     },
       createElement('span', {
         style: {
-          width: 9, height: 9, borderRadius: 5, background: dotColor, flexShrink: 0,
-          boxShadow: `0 0 6px ${dotColor}`,
+          width: capsuleBusy ? 9 : 8, height: capsuleBusy ? 9 : 8,
+          borderRadius: 5, background: dotColor, flexShrink: 0,
+          boxShadow: `0 0 ${capsuleBusy ? 6 : 10}px ${dotColor}`,
         },
       }),
       // Live label (v0.8.0): workflow "name·phase" → current tool → AGENT.
-      createElement('span', {
-        style: {
-          color: C.text, fontSize: 12, fontWeight: 600, letterSpacing: '0.02em',
-          maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        },
-        title: capsuleTitle,
-      }, capsuleLabel),
-      goal !== null && goal.phase !== 'complete'
+      capsuleBusy
+        ? createElement('span', {
+          style: {
+            color: C.text, fontSize: 12, fontWeight: 600, letterSpacing: '0.02em',
+            maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          },
+          title: capsuleTitle,
+        }, capsuleLabel)
+        : null,
+      capsuleBusy && goal !== null && goal.phase !== 'complete'
         ? createElement('span', {
           style: { color: C.faint, fontSize: 10, fontVariantNumeric: 'tabular-nums' },
           title: `goal running for ${fmtDur(goal.createdAt, state?.ts ?? Date.now())}`,
         }, `⏱ ${fmtDur(goal.createdAt, state?.ts ?? Date.now())}`)
         : null,
-      counts.map((count, index) => createElement('span', {
+      capsuleBusy && counts.map((count, index) => createElement('span', {
         key: index,
         style: {
           minWidth: 16, height: 16, borderRadius: 8, background: count.color, color: 'var(--pill-badge-text)',
