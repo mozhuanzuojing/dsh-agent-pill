@@ -136,6 +136,12 @@ export interface PillActivityEvent {
   count?: number
 }
 
+/** Files one turn (instruction) handled. */
+export interface PillTurn {
+  turn: number
+  files: PillFileDiff[]
+}
+
 /** One aggregated state snapshot. */
 export interface PillState {
   sessionId: string
@@ -148,6 +154,7 @@ export interface PillState {
   consumed?: PillConsumed
   fileDiffs?: PillFileDiff[]
   timeline?: PillActivityEvent[]
+  turns?: PillTurn[]
   agents?: PillFleetAgent[]
   services: { goals: boolean; subagents: boolean; jobs: boolean; agents: boolean; usage: boolean }
 }

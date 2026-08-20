@@ -11,6 +11,7 @@
 import { createElement, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ISessions } from '@deepseek-ai/dsh-client-runtime/client'
 import { api, PillApiError, type PillActivityEvent, type PillFileDiff, type PillJob, type PillState, type PillSubagent, type PillWorkflowRun } from './api.ts'
+import { pillStore } from './store.ts'
 
 /**
  * Theme-driven palette stylesheet. Dark is the :root default (matching the
@@ -833,18 +834,26 @@ function ActivityList(props: { timeline: PillActivityEvent[] }): JSX.Element {
 
 /* ── Root: capsule + popover ───────────────────────────────────────────── */
 
-function PillRoot(props: { sessions: ISessions }): JSX.Element {
-  const { sessions } = props
-  const [open, setOpen] = useState(false)
-  const [state, setState] = useState<PillState | null>(null)
-  // Detail layer stack: pushed views (workflow / subagent / job) on top of
-  // the main list. Back pops one level (two-level navigation: workflow
-  // step → subagent → back to the workflow). Cleared on target loss or
-  // session switch.
-  type PillLayer =
-    | { kind: 'workflow'; id: string }
-    | { kind: 'subagent'; id: string }
-    | { kind: 'job'; id: string }
+function PillRoot(): JSX.Element {
+  // Console popover visibility lives in the shared store (dock toggles it).
+  const consoleOpen = useSyncExternalStore(
+    useMemo(() => (cb: () => void) => pillStore.subscribe(cb), []),
+    useMemo(() => () => pillStore.getConsoleOpen(), []),
+  )
+  const state = useSyncExternalStore(
+    useMemo(() => (cb: () => void) => pillStore.subscribe(cb), []),
+    useMemo(() => () => pillStore.getState(), []),
+  )
+  const sessionId = useSyncExternalStore(
+    useMemo(() => (cb: () => void) => pillStore.subscribe(cb), []),
+    useMemo(() => () => pillStore.getSessionId(), []),
+  )
+  const dockVisible = useSyncExternalStore(
+    useMemo(() => (cb: () => void) => pillStore.subscribe(cb), []),
+    useMemo(() => () => pillStore.getDockVisible(), []),
+  )
+  // Detail layer stack: pushed views (job) on top of the console.
+  type PillLayer = { kind: 'job'; id: string }
   const [layers, setLayers] = useState<PillLayer[]>([])
   const detail = layers.length > 0 ? (layers[layers.length - 1] ?? null) : null
   const pushLayer = (layer: PillLayer): void => {
@@ -870,90 +879,14 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   const posRef = useRef(pos)
   const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number; moved: boolean } | null>(null)
   // One-shot suppression of the click that follows a drag end (a drag must
-  // not toggle the drawer); consumed by onClick, never left dangling.
+  // not toggle the dock); consumed by onClick, never left dangling.
   const suppressClickRef = useRef(false)
 
-  // Subscribe to the session list feed (current session id).
-  const snapshot = useSyncExternalStore(
-    useMemo(() => (cb: () => void) => sessions.list.subscribe(cb), [sessions]),
-    useMemo(() => () => sessions.list.getSnapshot(), [sessions]),
-  )
-  const sessionId = snapshot.current
-
-  // State refresh: active mode polls every 1.5s; when everything is idle the
-  // client parks on a host long-poll (`pill/api/poll`) and wakes on activity
-  // (v0.8.0 idle-pause consensus).
-  const [idle, setIdle] = useState(false)
-  const lastVersionRef = useRef(0)
-  const busyRef = useRef(false)
+  // Close the console and drop every layer when switching sessions.
   useEffect(() => {
-    if (sessionId === undefined) {
-      setState(null)
-      return
-    }
-    const controller = new AbortController()
-    let alive = true
-    const loadState = async (): Promise<void> => {
-      if (inFlight.current) return
-      inFlight.current = true
-      try {
-        const next = await api.state(sessionId, controller.signal)
-        if (!alive) return
-        setState(next)
-        const wf = (next.agent.workflows ?? []).find(run => !run.settled)
-        busyRef.current = next.agent.status === 'running' || next.agent.tool !== undefined
-          || next.subagents.some(s => s.kind === 'child' && s.activity === 'running')
-          || next.jobs.some(j => j.status === 'running' || j.status === 'stopping')
-          || (next.goal !== null && next.goal.phase !== 'complete')
-          || wf !== undefined
-        if (!busyRef.current) setIdle(true)
-      } catch (error) {
-        if (error instanceof PillApiError && error.code === 'network') {
-          // Host may be restarting; keep the last snapshot.
-        } else if (alive) {
-          setState(null)
-        }
-      } finally {
-        inFlight.current = false
-      }
-    }
-    const pollOnce = async (): Promise<void> => {
-      try {
-        const result = await api.poll(sessionId, lastVersionRef.current, controller.signal)
-        if (!alive) return
-        lastVersionRef.current = result.version
-        if (result.dirty) {
-          await loadState()
-          if (busyRef.current) setIdle(false)
-        }
-      } catch {
-        // Poll failure (host restarting): retry the loop after a pause.
-      }
-    }
-    void loadState()
-    if (idle) {
-      let stopped = false
-      let timer = 0
-      const loop = async (): Promise<void> => {
-        while (alive && !stopped) {
-          await pollOnce()
-          if (alive && !busyRef.current && !stopped) {
-            await new Promise<void>(resolve => { timer = window.setTimeout(resolve, 400) })
-          } else {
-            break
-          }
-        }
-      }
-      void loop()
-      return () => { alive = false; stopped = true; window.clearTimeout(timer); controller.abort() }
-    }
-    const timer = window.setInterval(() => { void loadState() }, 1500)
-    return () => {
-      alive = false
-      controller.abort()
-      window.clearInterval(timer)
-    }
-  }, [sessionId, idle])
+    pillStore.setConsoleOpen(false)
+    setLayers([])
+  }, [sessionId])
 
   // Desktop notifications on settlement transitions (tmux-agent-sidebar
   // style): workflow ended, job failed, goal completed. Each id fires once.
@@ -989,44 +922,22 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
     if (notifiedRef.current === null) notifiedRef.current = new Set()
   }, [state])
 
-  // Ctrl+Alt+P toggles the popover; Esc pops one layer first (detail →
-  // main → close), then closes.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.ctrlKey && event.altKey && (event.key === 'p' || event.key === 'P')) {
-        event.preventDefault()
-        setOpen(prev => !prev)
-      } else if (event.key === 'Escape') {
-        setLayers(prev => {
-          if (prev.length > 0) {
-            setLayerAnim('back')
-            return prev.slice(0, -1)
-          }
-          setOpen(false)
-          return prev
-        })
-      }
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [])
-
-  // Click outside the capsule+popover closes the popover (no overlay).
+  // Click outside the capsule+console closes the console (no overlay).
   const rootRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    if (!open) return
+    if (!consoleOpen) return
     const onPointerDown = (event: PointerEvent): void => {
       if (rootRef.current !== null && !rootRef.current.contains(event.target as Node)) {
-        setOpen(false)
+        pillStore.setConsoleOpen(false)
       }
     }
     document.addEventListener('pointerdown', onPointerDown, true)
     return () => document.removeEventListener('pointerdown', onPointerDown, true)
-  }, [open])
+  }, [consoleOpen])
 
-  // Close the popover and drop every layer when switching sessions.
+  // Close the console and drop every layer when switching sessions.
   useEffect(() => {
-    setOpen(false)
+    pillStore.setConsoleOpen(false)
     setLayers([])
   }, [sessionId])
 
@@ -1042,7 +953,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   const contentRef = useRef<HTMLDivElement>(null)
   const [panelWidth, setPanelWidth] = useState(360)
   useEffect(() => {
-    if (!open) return
+    if (!consoleOpen) return
     const el = contentRef.current
     if (el === null) return
     const observer = new ResizeObserver(() => {
@@ -1052,9 +963,9 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
     })
     observer.observe(el)
     return () => observer.disconnect()
-  }, [open, detail])
+  }, [consoleOpen, detail])
   useEffect(() => {
-    if (!open) return
+    if (!consoleOpen) return
     const compute = (): void => {
       const el = capsuleRef.current
       if (el === null) return
@@ -1072,7 +983,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
     compute()
     window.addEventListener('resize', compute)
     return () => window.removeEventListener('resize', compute)
-  }, [open])
+  }, [consoleOpen])
 
   // Collapsible sections, remembered in localStorage.
   const SECTION_KEY = 'dsh-agent-pill.sections'
@@ -1097,18 +1008,6 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
       try { window.localStorage.setItem(SECTION_KEY, JSON.stringify(next)) } catch { /* private mode */ }
       return next
     })
-  }
-  // Status-strip jump: expand the section and scroll it into view inside the
-  // popover body (v0.8.0 consensus: the strip is clickable navigation).
-  const jumpToSection = (key: string): void => {
-    setCollapsed(prev => {
-      const next = { ...prev, [key]: false }
-      try { window.localStorage.setItem(SECTION_KEY, JSON.stringify(next)) } catch { /* private mode */ }
-      return next
-    })
-    window.setTimeout(() => {
-      document.getElementById(`pill-sec-${key}`)?.scrollIntoView({ block: 'nearest' })
-    }, 0)
   }
 
   // Activity summary driving the capsule.
@@ -1165,7 +1064,6 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   const toolName = state?.agent.tool
   const fleet = state?.agents ?? []
   const recentTools = state?.agent.recentTools ?? []
-  const timeline = state?.timeline ?? []
   // Capsule live label (v0.8.0): workflow "name·phase" → current tool → AGENT.
   const nowMs = state?.ts ?? Date.now()
   const capsuleLabel = runningWorkflow !== undefined
@@ -1176,34 +1074,19 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
     : toolName !== undefined
       ? `${toolName} · ${fmtDur(state?.agent.toolSince ?? nowMs, nowMs)}`
       : 'Agent activity — idle'
-  // Status strip (v0.8.0): one-line "what is happening now" under the header;
-  // clicking jumps to the workflow detail or back to the main view.
-  const statusLine: { text: string; layer: PillLayer | null } | null = runningWorkflow !== undefined
-    ? { text: `⚙ ${runningWorkflow.name} · ${runningWorkflow.phase ?? 'running'} · ${fmtDur(runningWorkflow.startedAt, nowMs)}`, layer: { kind: 'workflow', id: runningWorkflow.id } }
-    : toolName !== undefined
-      ? { text: `⛭ ${toolName} · ${fmtDur(state?.agent.toolSince ?? nowMs, nowMs)}`, layer: null }
-      : goal !== null && goal.phase !== 'complete'
-        ? { text: `🎯 ${goal.phase} · round ${goal.roundsStarted}/${goal.maxGoalRounds}`, layer: null }
-        : null
   // Resolve the top detail-layer target against the live snapshot; if it is
   // gone (list refreshed, run replaced), pop back one level.
-  const detailRun = detail !== null && detail.kind === 'workflow'
-    ? (state?.agent.workflows ?? []).find(run => run.id === detail.id)
-    : undefined
-  const detailChild = detail !== null && detail.kind === 'subagent'
-    ? (state?.subagents ?? []).find(child => child.id === detail.id)
-    : undefined
   const detailJob = detail !== null && detail.kind === 'job'
     ? (state?.jobs ?? []).find(job => job.id === detail.id)
     : undefined
   useEffect(() => {
-    if (detail !== null && detailRun === undefined && detailChild === undefined && detailJob === undefined && state !== null) {
+    if (detail !== null && detailJob === undefined && state !== null) {
       popLayer()
     }
-  }, [detail, detailRun, detailChild, detailJob, state])
+  }, [detail, detailJob, state])
 
   return createElement('div', { ref: rootRef },
-    // ── Capsule (draggable; click toggles the popover) ──
+    // ── Capsule (draggable; click toggles the composer dock strip) ──
     createElement('button', {
       ref: capsuleRef,
       onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -1213,7 +1096,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
           event.preventDefault()
           return
         }
-        setOpen(prev => !prev)
+        pillStore.toggleDock()
       },
       onPointerDown: (event: React.PointerEvent<HTMLButtonElement>) => {
         const el = event.currentTarget
@@ -1255,7 +1138,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
       },
       title: `Agent activity (${counts.map(c => c.title).join(', ') || 'idle'})${toolName !== undefined ? ` — running ${toolName}` : ''} — drag to move, click or Ctrl+Alt+P for panel`,
       'aria-label': 'Agent activity',
-      'aria-pressed': open,
+      'aria-pressed': dockVisible,
       style: {
         position: 'fixed', zIndex: 2147483001,
         ...(pos === null ? { top: 14, right: 14 } : { top: pos.y, left: pos.x }),
@@ -1296,8 +1179,8 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
         title: count.title,
       }, count.value)),
     ),
-    // ── Popover (tooltip-style, anchored to the capsule, viewport-flipped) ──
-    open && panelPos !== null
+    // ── Console popover (tooltip-style, anchored to the capsule, viewport-flipped) ──
+    consoleOpen && panelPos !== null
       ? createElement('div', {
         style: {
           position: 'fixed', top: panelPos.top, left: panelPos.left,
@@ -1325,9 +1208,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
               }, '←'),
               createElement('span', {
                 style: { color: C.text, fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
-              }, detail.kind === 'workflow' ? (detailRun?.name ?? 'Workflow')
-                : detail.kind === 'subagent' ? (detailChild?.label ?? 'Subagent')
-                : (detailJob?.label ?? 'Job')),
+              }, detail.kind === 'job' ? (detailJob?.label ?? 'Job') : ''),
             )
             : createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
               createElement('span', { style: { width: 9, height: 9, borderRadius: 5, background: dotColor } }),
@@ -1337,78 +1218,33 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                 : null,
             ),
           createElement('button', {
-            onClick: () => setOpen(false), 'aria-label': 'Close', title: 'Close (Esc / Ctrl+Alt+P)',
+            onClick: () => pillStore.setConsoleOpen(false), 'aria-label': 'Close', title: 'Close (Esc / Ctrl+Alt+P)',
             style: { ...iconButtonStyle, fontSize: 13, padding: '2px 9px' },
           }, '✕'),
         ),
-        // ── Status strip: one-line "what is happening now" (v0.8.0) ──
-        statusLine !== null && detail === null
-          ? createElement('div', {
-            onClick: () => {
-              if (statusLine.layer !== null) {
-                pushLayer(statusLine.layer)
-              } else if (toolName !== undefined) {
-                jumpToSection('agent')
-              } else if (goal !== null && goal.phase !== 'complete') {
-                jumpToSection('goal')
-              }
-            },
-            title: statusLine.layer !== null ? 'Open workflow details' : 'Jump to section',
-            style: {
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '6px 14px', borderBottom: `1px solid ${C.border}`, background: C.panel2,
-              fontSize: 11, color: C.text, cursor: 'pointer', flexShrink: 0,
-            },
-          },
-            createElement('span', { style: { color: C.purple, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 } }, statusLine.text),
-            createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, 'details ›'),
-          )
-          : null,
-        // ── Scrollable body: detail layer (pushed) or the main view ──
+        // ── Scrollable body: job detail layer (pushed) or the console view ──
         createElement('div', {
           key: detail === null ? 'main' : `${detail.kind}:${detail.id}`,
           ref: bodyRef,
           className: layerAnim === 'in' ? 'pill-layer-in' : 'pill-layer-back',
           style: { flex: 1, overflowY: 'auto', padding: '4px 14px 20px' },
         },
-          // Content wrapper: max-content only for workflow details (long diff
-          // rows drive the adaptive width); other views keep block layout.
           createElement('div', {
             ref: contentRef,
-            style: detail !== null && detail.kind === 'workflow'
-              ? { width: 'max-content', minWidth: '100%' }
-              : { minWidth: '100%' },
+            style: { minWidth: '100%' },
           },
           state === null
             ? createElement('div', { style: { color: C.faint, fontSize: 12, padding: '16px 0' } },
               sessionId === undefined ? 'No active conversation' : 'Loading…')
-            : detail !== null && detail.kind === 'workflow' && detailRun !== undefined
-              ? createElement(WorkflowDetail, {
-                run: detailRun,
+            : detail !== null && detail.kind === 'job' && detailJob !== undefined
+              ? createElement(JobDetail, {
+                job: detailJob,
+                sessionId: state.sessionId,
                 ts: state.ts,
-                subagents: state.subagents,
-                onOpenSubagent: (childId) => {
-                  pushLayer({ kind: 'subagent', id: childId })
-                },
-                fileDiffs: state.fileDiffs ?? [],
+                onAction: () => { /* store polling refreshes automatically */ },
               })
-              : detail !== null && detail.kind === 'subagent' && detailChild !== undefined
-                ? createElement(SubagentDetail, {
-                  child: detailChild,
-                  ts: state.ts,
-                  sessionId: state.sessionId,
-                  onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) },
-                })
-                : detail !== null && detail.kind === 'job' && detailJob !== undefined
-                  ? createElement(JobDetail, {
-                    job: detailJob,
-                    sessionId: state.sessionId,
-                    ts: state.ts,
-                    onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) },
-                  })
-                  : createElement('div', null,
-              // ── Empty-state hiding (v0.6.0): a section renders only when it
-              // has real content; the header above always stays. ──
+              : createElement('div', null,
+              // ── Console (v0.10.0): Goal / Jobs / Usage / Sessions only. ──
               state.goal !== null
                 ? createElement('div', { id: 'pill-sec-goal' },
                   createElement(Section, {
@@ -1416,81 +1252,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                   }),
                   collapsed.goal === true
                     ? null
-                    : createElement(GoalCard, { state, onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) } }),
-                )
-                : null,
-              state.agent.status !== 'absent' || state.agent.tool !== undefined || (state.agent.inbox ?? 0) > 0 || (state.agent.workflows ?? []).length > 0
-                ? createElement('div', { id: 'pill-sec-agent' },
-                  createElement(Section, {
-                    title: 'Agent', onToggle: () => toggleSection('agent'), collapsed: collapsed.agent === true,
-                  }),
-                  collapsed.agent === true
-                    ? null
-                    : createElement('div', null,
-                      createElement(Row, {
-                        label: 'status',
-                        value: state.agent.status,
-                        color: state.agent.status === 'running' ? C.yellow : state.agent.status === 'idle' ? C.green : C.faint,
-                      }),
-                      state.agent.tool !== undefined
-                        ? createElement(Row, {
-                          label: 'tool',
-                          value: `${state.agent.tool}${state.agent.toolSince !== undefined ? ` · ${fmtDur(state.agent.toolSince, state.ts)}` : ''}`,
-                          color: C.purple,
-                        })
-                        : null,
-                      recentTools.length > 0
-                        ? createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 4, padding: '2px 0 4px' } },
-                          recentTools.map((t, index) => createElement('span', {
-                            key: `${t.name}-${index}`,
-                            style: {
-                              fontSize: 10, color: C.dim, background: C.bg, border: `1px solid ${C.border}`,
-                              borderRadius: 4, padding: '1px 6px', maxWidth: 200,
-                              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                            },
-                            title: `${t.name} · ${fmtDur(Date.now() - t.durationMs, Date.now())}`,
-                          }, `${t.name} · ${fmtDur(Date.now() - t.durationMs, Date.now())}`)),
-                        )
-                        : null,
-                      state.agent.inbox !== undefined && state.agent.inbox > 0
-                        ? createElement(Row, {
-                          label: 'queued',
-                          value: `${state.agent.inbox} message${state.agent.inbox > 1 ? 's' : ''} waiting`,
-                          color: C.yellow,
-                        })
-                        : null,
-                      createElement(WorkflowList, {
-                        state,
-                        onOpen: (run) => pushLayer({ kind: 'workflow', id: run.id }),
-                      }),
-                    ),
-                )
-                : null,
-              timeline.length > 0
-                ? createElement('div', null,
-                  createElement(Section, {
-                    title: 'Activity', count: timeline.length,
-                    onToggle: () => toggleSection('activity'), collapsed: collapsed.activity === true,
-                  }),
-                  collapsed.activity === true
-                    ? null
-                    : createElement(ActivityList, { timeline }),
-                )
-                : null,
-              state.subagents.filter(s => s.kind === 'child').length > 0 || state.subagents.some(s => s.kind === 'diagnostic')
-                ? createElement('div', null,
-                  createElement(Section, {
-                    title: 'Subagents',
-                    count: state.subagents.filter(s => s.kind === 'child').length,
-                    onToggle: () => toggleSection('subagents'), collapsed: collapsed.subagents === true,
-                  }),
-                  collapsed.subagents === true
-                    ? null
-                    : createElement(SubagentList, {
-                      state,
-                      onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) },
-                      onOpen: (child) => pushLayer({ kind: 'subagent', id: child.id }),
-                    }),
+                    : createElement(GoalCard, { state, onAction: () => { /* store polling refreshes automatically */ } }),
                 )
                 : null,
               state.jobs.length > 0
@@ -1598,6 +1360,98 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
         ),
       )
       : null,
+  )
+}
+
+/* ── Composer dock strip (conversation.input.dock) ─────────────────────── */
+
+/**
+ * The dock strip above the composer: live per-session activity. Hidden when
+ * the capsule toggles it off; the expand button opens the console popover.
+ * Registered with loose props (the slot runtime composes session/locale
+ * faces; this component only reads the shared pill store).
+ */
+export function DockBar(props: any): JSX.Element | null {
+  const dockVisible = useSyncExternalStore(
+    useMemo(() => (cb: () => void) => pillStore.subscribe(cb), []),
+    useMemo(() => () => pillStore.getDockVisible(), []),
+  )
+  const state = useSyncExternalStore(
+    useMemo(() => (cb: () => void) => pillStore.subscribe(cb), []),
+    useMemo(() => () => pillStore.getState(), []),
+  )
+  if (!dockVisible || state === null) return null
+  const timeline = state.timeline ?? []
+  const tool = state.agent.tool
+  const toolSince = state.agent.toolSince
+  return createElement('div', {
+    style: {
+      boxSizing: 'border-box', width: '100%', padding: '0 14px', margin: '0 0 4px',
+      display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,
+      fontFamily: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
+    },
+  },
+    createElement('span', {
+      style: {
+        fontSize: 10, color: C.faint, flexShrink: 0, padding: '2px 7px',
+        background: C.panel2, border: `1px solid ${C.border}`, borderRadius: 999,
+      },
+    }, tool !== undefined
+      ? `⛭ ${tool}${toolSince !== undefined ? ` · ${fmtDur(toolSince, Date.now())}` : ''}`
+      : state.agent.status === 'running' ? '⛭ working…' : '⚡ idle'),
+    timeline.slice(0, 4).map((event, index) => createElement('span', {
+      key: index,
+      style: {
+        fontSize: 10, color: C.dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        maxWidth: 180, flexShrink: 0,
+      },
+      title: event.detail ?? event.text,
+    }, `${ACTIVITY_ICON[event.kind] ?? '·'} ${event.text}${event.count !== undefined && event.count > 1 ? ` ×${event.count}` : ''}`)),
+    createElement('div', { style: { flex: 1 } }),
+    createElement('button', {
+      onClick: () => pillStore.setConsoleOpen(true),
+      'aria-label': 'Open console',
+      title: 'Open console (goals, jobs, usage, sessions)',
+      style: iconButtonStyleSmall,
+    }, '⌘ console'),
+  )
+}
+
+const ACTIVITY_ICON: Record<string, string> = {
+  tool: '⛭',
+  'tool-done': '✓',
+  file: '✎',
+  workflow: '⚙',
+  subagent: '▸',
+  goal: '🎯',
+}
+
+/* ── Turn-tail file rows (conversation.chat.turnTail) ──────────────────── */
+
+/**
+ * Under each instruction (turn) the files that instruction handled, with
+ * inline diffs (Claude Code "files changed" pattern). The owner carries the
+ * turn location; files come from the shared store's per-turn aggregation.
+ * Loose props: the runtime composes the owner face; we only need the turn
+ * number off the chat node data.
+ */
+export function TurnTailFiles(props: any): JSX.Element | null {
+  const state = useSyncExternalStore(
+    useMemo(() => (cb: () => void) => pillStore.subscribe(cb), []),
+    useMemo(() => () => pillStore.getState(), []),
+  )
+  const node = props.node as { data?: { turn?: number } } | undefined
+  const turn = typeof node?.data?.turn === 'number' ? node.data.turn : undefined
+  if (state === null || turn === undefined) return null
+  const turns = state.turns ?? []
+  const entry = turns.find(t => t.turn === turn)
+  if (entry === undefined || entry.files.length === 0) return null
+  return createElement('div', {
+    style: { padding: '2px 0 6px', marginTop: 2 },
+  },
+    createElement('div', { style: { color: C.faint, fontSize: 10, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } },
+      `Files changed (${entry.files.length})`),
+    entry.files.map(file => createElement(FileRow, { key: file.path, diff: file, now: Date.now() })),
   )
 }
 
