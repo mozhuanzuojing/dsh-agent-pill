@@ -629,7 +629,12 @@ function WorkflowDetail(props: {
       ? createElement('div', null,
         createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 10, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, `Files (${run.files.length})`),
         run.files.map((file) => {
+          // The fs feed reports absolute display paths, while tool/result
+          // diffs carry the model-facing path (relative to the workspace) —
+          // match exactly first, then by basename.
+          const base = file.split(/[\\/]/).pop() ?? file
           const diff = fileDiffs.find(d => d.path === file)
+            ?? fileDiffs.find(d => (d.path.split(/[\\/]/).pop() ?? d.path) === base)
           if (diff === undefined) {
             // File observed but no collected diff (read-only activity).
             return createElement('div', { key: file, style: { display: 'flex', alignItems: 'center', gap: 8, padding: '3px 4px' } },
