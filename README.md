@@ -27,6 +27,7 @@ DSH (DeepSeek Harness) web plugin: a ZCode-style agent activity pill (top-right 
 - **Real context window (v0.6.0)**: the pressure bar uses the resolved model context window (`llm.resolveModelInfo` on the current default model selection, 60s cache) when available, falling back to the assumed ~200k.
 - **Step ↔ subagent linkage (v0.6.0)**: workflow step rows resolve their `childId` against the observed subagent rows and show the child's run duration and terminal color.
 - **Empty-state hiding (v0.6.0)**: a section renders only when it has real content — Goal without a goal, Subagents without children, Jobs without entries, Usage when unavailable, Sessions without agents, and an Agent section with nothing to say are all hidden entirely.
+- **Detail layers (v0.7.0)**: clicking a workflow run or a subagent row **pushes a new detail layer** inside the popover (back button in the header) instead of expanding in place — the workflow detail shows its full steps with subagent durations and observed files, the subagent detail shows its identity, mode, timing, terminal state and a stop control. The layer auto-returns when the target disappears and resets on session switch.
 
 ## Install
 
