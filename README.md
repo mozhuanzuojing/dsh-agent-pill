@@ -28,6 +28,10 @@ DSH (DeepSeek Harness) web plugin: a ZCode-style agent activity pill (top-right 
 - **Step ↔ subagent linkage (v0.6.0)**: workflow step rows resolve their `childId` against the observed subagent rows and show the child's run duration and terminal color.
 - **Empty-state hiding (v0.6.0)**: a section renders only when it has real content — Goal without a goal, Subagents without children, Jobs without entries, Usage when unavailable, Sessions without agents, and an Agent section with nothing to say are all hidden entirely.
 - **Detail layers (v0.7.0)**: clicking a workflow run or a subagent row **pushes a new detail layer** inside the popover (back button in the header) instead of expanding in place — the workflow detail shows its full steps with subagent durations and observed files, the subagent detail shows its identity, mode, timing, terminal state and a stop control. The layer auto-returns when the target disappears and resets on session switch.
+- **Live capsule label (v0.8.0)**: the capsule text becomes the running workflow's `name·phase`, falls back to the current tool name, then to `AGENT` — what the agent is doing is now visible without opening anything.
+- **Status strip (v0.8.0)**: the popover header is followed by a one-line "what is happening now" (workflow phase / tool / goal round) that clicks through to the workflow detail.
+- **File diffs (v0.8.0)**: workflow file chips open a **file detail layer** with the collected result-time diff (`tool/result` meta diffs from `dsh-tool-fs`: new-file, edit, or overwrite; rendered as a line-level diff) plus a copy-path button.
+- **Idle long-poll (v0.8.0)**: while everything is idle the client parks on a host long-poll (`POST /pill/api/poll`, 30s cap) instead of polling every 1.5s — activity wakes it, then the active cadence resumes.
 
 ## Install
 
