@@ -92,6 +92,17 @@ export interface SessionUsage {
   cacheWrite: number
 }
 
+/** One collected result-time file diff ({path, oldText|null, newText} + observed time). */
+export interface FileDiffRecord {
+  path: string
+  /** Prior content, or null for a new file / an overwrite. */
+  oldText: string | null
+  /** Content after the change. */
+  newText: string
+  /** Host clock when the diff was observed. */
+  ts: number
+}
+
 /** Process-local activity timeline for the pill panel. */
 export class ActivityTracker {
   /** Bounded history of the most recent workflow runs. */
@@ -215,6 +226,8 @@ export class ActivityTracker {
   private readonly currentTools = new Map<string, { name: string; startedAt: number }>()
   /** Recently completed tools: {name, durationMs}, newest first (bounded). */
   private readonly recentTools = new Map<string, Array<{ name: string; durationMs: number }>>()
+  /** Result-time file diffs per session: path → latest record. */
+  private readonly fileDiffs = new Map<string, Map<string, FileDiffRecord>>()
   private readonly usage = new Map<string, SessionUsage>()
   private readonly inboxCounts = new Map<string, number>()
 
@@ -249,6 +262,27 @@ export class ActivityTracker {
         list.unshift({ name: inFlight.name, durationMs: Date.now() - inFlight.startedAt })
         this.recentTools.set(sessionId, list.slice(0, 5))
         this.currentTools.delete(sessionId)
+      }
+      // Result-time contextual diffs (dsh-tool-fs attaches { diffs: FileDiff[] }
+      // as meta on write/edit results): { path, oldText|null, newText }.
+      const meta = data.meta
+      const diffs = typeof meta === 'object' && meta !== null ? (meta as Record<string, unknown>).diffs : undefined
+      if (Array.isArray(diffs)) {
+        const perFile = this.fileDiffs.get(sessionId) ?? new Map<string, FileDiffRecord>()
+        for (const entry of diffs) {
+          if (typeof entry !== 'object' || entry === null) continue
+          const e = entry as Record<string, unknown>
+          const path = typeof e.path === 'string' && e.path !== '' ? e.path : undefined
+          const newText = typeof e.newText === 'string' ? e.newText : undefined
+          if (path === undefined || newText === undefined) continue
+          perFile.set(path, {
+            path,
+            oldText: typeof e.oldText === 'string' ? e.oldText : null,
+            newText,
+            ts: Date.now(),
+          })
+        }
+        this.fileDiffs.set(sessionId, perFile)
       }
       return
     }
@@ -300,6 +334,11 @@ export class ActivityTracker {
   /** Accumulated adapter-reported token usage for one session. */
   usageOf(sessionId: string): SessionUsage {
     return { ...(this.usage.get(sessionId) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }) }
+  }
+
+  /** Result-time file diffs for one session (path → latest record). */
+  fileDiffsOf(sessionId: string): FileDiffRecord[] {
+    return [...(this.fileDiffs.get(sessionId)?.values() ?? [])]
   }
 
   /** Queued (inbox) message count for one session. */

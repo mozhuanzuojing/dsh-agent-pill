@@ -327,55 +327,93 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
     return snapshots
   }
 
+  // ── Activity signal for the idle poll (long-poll wakeups) ───────────────
+  let activityVersion = 0
+  const activityWaiters: Array<() => void> = []
+  const bumpActivity = (): void => {
+    activityVersion++
+    const waiters = activityWaiters.splice(0)
+    for (const wake of waiters) wake()
+  }
+  const waitForActivity = (since: number, timeoutMs: number): Promise<number> =>
+    new Promise((resolve) => {
+      if (activityVersion > since) {
+        resolve(activityVersion)
+        return
+      }
+      const wake = (): void => {
+        clearTimeout(timer)
+        resolve(activityVersion)
+      }
+      const timer = setTimeout(() => {
+        const index = activityWaiters.indexOf(wake)
+        if (index >= 0) activityWaiters.splice(index, 1)
+        resolve(activityVersion)
+      }, timeoutMs)
+      activityWaiters.push(wake)
+    })
+
   // ── Live event wiring (every subscription is effect-owned for HMR) ──────
   ctx.effect(() => ctx.on('session/event', (session, event) => {
     const sessionId = (session as { id?: unknown } | null)?.id
     if (typeof sessionId !== 'string') return
     goalTracker.onSessionEvent(sessionId, event)
     tracker.onSessionEvent(sessionId, event)
+    bumpActivity()
   }), 'dsh-agent-pill: session/event feed')
   ctx.effect(() => ctx.on('agent/inbox/inserted', (payload) => {
     const id = (payload as { agent?: { session?: { id?: unknown } } } | null)?.agent?.session?.id
     tracker.onInboxEvent(typeof id === 'string' ? id : undefined, 'inserted')
+    bumpActivity()
   }), 'dsh-agent-pill: inbox inserted feed')
   ctx.effect(() => ctx.on('agent/inbox/claimed', (payload) => {
     const id = (payload as { agent?: { session?: { id?: unknown } } } | null)?.agent?.session?.id
     tracker.onInboxEvent(typeof id === 'string' ? id : undefined, 'claimed')
+    bumpActivity()
   }), 'dsh-agent-pill: inbox claimed feed')
   ctx.effect(() => ctx.on('agent/inbox/discarded', (payload) => {
     const id = (payload as { agent?: { session?: { id?: unknown } } } | null)?.agent?.session?.id
     tracker.onInboxEvent(typeof id === 'string' ? id : undefined, 'discarded')
+    bumpActivity()
   }), 'dsh-agent-pill: inbox discarded feed')
   ctx.effect(() => ctx.on('subagent/start', (info) => {
     tracker.onSubagentStart(info)
     const id = (info as { id?: unknown } | null)?.id
     if (typeof id === 'string') void refreshSubagentsOf(ctx, id, refreshSubagents)
+    bumpActivity()
   }), 'dsh-agent-pill: subagent/start feed')
   ctx.effect(() => ctx.on('subagent/end', (info) => {
     tracker.onSubagentEnd(info)
     const id = (info as { id?: unknown } | null)?.id
     if (typeof id === 'string') void refreshSubagentsOf(ctx, id, refreshSubagents)
+    bumpActivity()
   }), 'dsh-agent-pill: subagent/end feed')
   ctx.effect(() => ctx.on('workflow/start', (info) => {
     tracker.onWorkflowStart(info)
+    bumpActivity()
   }), 'dsh-agent-pill: workflow/start feed')
   ctx.effect(() => ctx.on('workflow/phase', (info, title) => {
     tracker.onWorkflowPhase(info, title)
+    bumpActivity()
   }), 'dsh-agent-pill: workflow/phase feed')
   ctx.effect(() => ctx.on('workflow/agent-start', (info, agent) => {
     tracker.onWorkflowAgentStart(info, agent)
+    bumpActivity()
   }), 'dsh-agent-pill: workflow/agent-start feed')
   ctx.effect(() => ctx.on('workflow/agent-end', (info, agent) => {
     tracker.onWorkflowAgentEnd(info, agent)
+    bumpActivity()
   }), 'dsh-agent-pill: workflow/agent-end feed')
   ctx.effect(() => ctx.on('workflow/end', (info, result) => {
     tracker.onWorkflowEnd(info, result)
+    bumpActivity()
   }), 'dsh-agent-pill: workflow/end feed')
   ctx.effect(() => ctx.on('fs/observed', (target, observation, actor) => {
     tracker.onFsObserved(target)
+    bumpActivity()
   }), 'dsh-agent-pill: fs/observed feed')
   if (jobs !== undefined) {
-    ctx.effect(() => jobs.onJobsChanged(() => { jobsDirty = true }), 'dsh-agent-pill: jobs change feed')
+    ctx.effect(() => jobs.onJobsChanged(() => { jobsDirty = true; bumpActivity() }), 'dsh-agent-pill: jobs change feed')
   }
 
   // Throttled token-meter snapshot (measurement is O(surface); 10s reuse).
@@ -441,6 +479,7 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
       const toolSince = tracker.toolSinceOf(sessionId)
       const recentTools = tracker.recentToolsOf(sessionId)
       const inbox = tracker.inboxCountOf(sessionId)
+      const fileDiffs = tracker.fileDiffsOf(sessionId)
       // Global agent fleet (tasklight / tmux-agent-sidebar style overview):
       // every live agent with its status and goal objective snippet.
       const fleet = agents !== undefined
@@ -474,6 +513,7 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
         })),
         ...(usage !== null ? { usage: { ...usage, ...(contextWindow !== undefined ? { contextWindow } : {}) } } : {}),
         ...(hasConsumed ? { consumed } : {}),
+        ...(fileDiffs.length > 0 ? { fileDiffs } : {}),
         ...(fleet.length > 0 ? { agents: fleet } : {}),
         services: {
           goals: goals !== undefined,
@@ -483,6 +523,14 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
           usage: tokenMeter !== undefined,
         },
       }
+    },
+    'poll': async (payload) => {
+      // Long-poll for the idle client: resolves as soon as any host
+      // activity bumps the version past `since`, or after the timeout.
+      const since = payload as { since?: unknown }
+      const sinceVersion = typeof since?.since === 'number' && Number.isFinite(since.since) ? since.since : 0
+      const version = await waitForActivity(sinceVersion, 30_000)
+      return { dirty: version > sinceVersion, version }
     },
     'goal.pause': (payload) => {
       if (goals === undefined) throw new PillError('goal-error', 'the goal service is not mounted', 503)
