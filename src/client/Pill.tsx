@@ -1440,8 +1440,9 @@ export function TurnTailFiles(props: any): JSX.Element | null {
     useMemo(() => (cb: () => void) => pillStore.subscribe(cb), []),
     useMemo(() => () => pillStore.getState(), []),
   )
-  const node = props.node as { data?: { turn?: number } } | undefined
-  const turn = typeof node?.data?.turn === 'number' ? node.data.turn : undefined
+  // The chain owner carries the engine-owned TurnLocation ({turn: number}).
+  const owner = props.owner as { turn?: { turn?: unknown } } | undefined
+  const turn = typeof owner?.turn?.turn === 'number' ? owner.turn.turn : undefined
   if (state === null || turn === undefined) return null
   const turns = state.turns ?? []
   const entry = turns.find(t => t.turn === turn)
