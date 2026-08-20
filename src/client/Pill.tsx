@@ -666,16 +666,28 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   const { sessions } = props
   const [open, setOpen] = useState(false)
   const [state, setState] = useState<PillState | null>(null)
-  // Detail layer: a pushed view (workflow / subagent / job) on top of the
-  // main list; back returns one level. Cleared when the target disappears
-  // or on session switch.
-  const [detail, setDetail] = useState<
-    { kind: 'workflow'; id: string } | { kind: 'subagent'; id: string } | { kind: 'job'; id: string } | null
-  >(null)
+  // Detail layer stack: pushed views (workflow / subagent / job) on top of
+  // the main list. Back pops one level (two-level navigation: workflow
+  // step → subagent → back to the workflow). Cleared on target loss or
+  // session switch.
+  type PillLayer = { kind: 'workflow'; id: string } | { kind: 'subagent'; id: string } | { kind: 'job'; id: string }
+  const [layers, setLayers] = useState<PillLayer[]>([])
+  const detail = layers.length > 0 ? (layers[layers.length - 1] ?? null) : null
+  const pushLayer = (layer: PillLayer): void => {
+    setLayerAnim('in')
+    setLayers(prev => [...prev, layer])
+  }
+  const popLayer = (): void => {
+    setLayerAnim('back')
+    setLayers(prev => prev.slice(0, -1))
+  }
+  const clearLayers = (): void => {
+    setLayerAnim('back')
+    setLayers([])
+  }
   // Animation direction for layer transitions (enter pushes from the right,
-  // back slides from the left); derived from the previous detail presence.
+  // back slides from the left).
   const [layerAnim, setLayerAnim] = useState<'in' | 'back'>('in')
-  const prevDetailRef = useRef<{ kind: string; id: string } | null>(null)
   const inFlight = useRef(false)
 
   // ── Capsule drag ──
@@ -761,7 +773,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
     if (notifiedRef.current === null) notifiedRef.current = new Set()
   }, [state])
 
-  // Ctrl+Alt+P toggles the popover; Esc returns one layer first (detail →
+  // Ctrl+Alt+P toggles the popover; Esc pops one layer first (detail →
   // main → close), then closes.
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
@@ -769,10 +781,10 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
         event.preventDefault()
         setOpen(prev => !prev)
       } else if (event.key === 'Escape') {
-        setDetail(prev => {
-          if (prev !== null) {
+        setLayers(prev => {
+          if (prev.length > 0) {
             setLayerAnim('back')
-            return null
+            return prev.slice(0, -1)
           }
           setOpen(false)
           return prev
@@ -796,10 +808,10 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
     return () => document.removeEventListener('pointerdown', onPointerDown, true)
   }, [open])
 
-  // Close the popover when switching sessions.
+  // Close the popover and drop every layer when switching sessions.
   useEffect(() => {
     setOpen(false)
-    setDetail(null)
+    setLayers([])
   }, [sessionId])
 
   // Popover geometry: anchored to the capsule, flipped to stay in viewport.
@@ -905,8 +917,8 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
   const toolName = state?.agent.tool
   const fleet = state?.agents ?? []
   const recentTools = state?.agent.recentTools ?? []
-  // Resolve the detail-layer target against the live snapshot; if it is
-  // gone (list refreshed, run replaced), drop back to the main view.
+  // Resolve the top detail-layer target against the live snapshot; if it is
+  // gone (list refreshed, run replaced), pop back one level.
   const detailRun = detail !== null && detail.kind === 'workflow'
     ? (state?.agent.workflows ?? []).find(run => run.id === detail.id)
     : undefined
@@ -918,20 +930,9 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
     : undefined
   useEffect(() => {
     if (detail !== null && detailRun === undefined && detailChild === undefined && detailJob === undefined && state !== null) {
-      setDetail(null)
+      popLayer()
     }
   }, [detail, detailRun, detailChild, detailJob, state])
-  // Track layer direction for the push/back animation (entering a layer
-  // pushes from the right; returning to the previous level slides back).
-  useEffect(() => {
-    const prev = prevDetailRef.current
-    const prevActive = prev !== null
-    const nowActive = detail !== null
-    if (nowActive && !prevActive) setLayerAnim('in')
-    if (!nowActive && prevActive) setLayerAnim('back')
-    if (nowActive && prevActive && (prev.kind !== detail.kind || prev.id !== detail.id)) setLayerAnim('in')
-    prevDetailRef.current = detail
-  }, [detail])
 
   return createElement('div', { ref: rootRef },
     // ── Capsule (draggable; click toggles the popover) ──
@@ -1042,10 +1043,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
           detail !== null
             ? createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 } },
               createElement('button', {
-                onClick: () => {
-                  setLayerAnim('back')
-                  setDetail(null)
-                },
+                onClick: popLayer,
                 'aria-label': 'Back',
                 title: 'Back',
                 style: { ...iconButtonStyle, fontSize: 13, padding: '2px 9px', flexShrink: 0 },
@@ -1083,8 +1081,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                 ts: state.ts,
                 subagents: state.subagents,
                 onOpenSubagent: (childId) => {
-                  setLayerAnim('in')
-                  setDetail({ kind: 'subagent', id: childId })
+                  pushLayer({ kind: 'subagent', id: childId })
                 },
               })
               : detail !== null && detail.kind === 'subagent' && detailChild !== undefined
@@ -1156,7 +1153,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                         : null,
                       createElement(WorkflowList, {
                         state,
-                        onOpen: (run) => setDetail({ kind: 'workflow', id: run.id }),
+                        onOpen: (run) => pushLayer({ kind: 'workflow', id: run.id }),
                       }),
                     ),
                 )
@@ -1173,7 +1170,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                     : createElement(SubagentList, {
                       state,
                       onAction: () => { void api.state(state.sessionId, undefined).then(setState).catch(() => {}) },
-                      onOpen: (child) => setDetail({ kind: 'subagent', id: child.id }),
+                      onOpen: (child) => pushLayer({ kind: 'subagent', id: child.id }),
                     }),
                 )
                 : null,
@@ -1187,10 +1184,7 @@ function PillRoot(props: { sessions: ISessions }): JSX.Element {
                     ? null
                     : createElement(JobList, {
                       state,
-                      onOpen: (job) => {
-                        setLayerAnim('in')
-                        setDetail({ kind: 'job', id: job.id })
-                      },
+                      onOpen: (job) => pushLayer({ kind: 'job', id: job.id }),
                     }),
                 )
                 : null,
