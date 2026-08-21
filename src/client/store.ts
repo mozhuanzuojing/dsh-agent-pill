@@ -25,7 +25,7 @@ function busyOf(next: PillState): boolean {
   return next.agent.status === 'running' || next.agent.toolSince !== undefined
     || next.subagents.some(s => s.kind === 'child' && s.activity === 'running')
     || next.jobs.some(j => j.status === 'running' || j.status === 'stopping')
-    || (next.goal !== null && next.goal.phase !== 'complete')
+    || (next.goal !== null && next.goal.phase === 'active')
     || (next.agent.workflows ?? []).some(run => !run.settled)
 }
 

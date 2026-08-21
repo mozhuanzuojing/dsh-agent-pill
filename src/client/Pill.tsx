@@ -1058,7 +1058,7 @@ function PillRoot(): JSX.Element {
     agentRunning || state.agent.toolSince !== undefined
     || state.subagents.some(s => s.kind === 'child' && s.activity === 'running')
     || state.jobs.some(j => j.status === 'running' || j.status === 'stopping')
-    || (state.goal !== null && state.goal.phase !== 'complete')
+    || (state.goal !== null && state.goal.phase === 'active')
     || (state.agent.workflows ?? []).some(run => !run.settled)
   )
   const dotColor = state === null ? C.faint
