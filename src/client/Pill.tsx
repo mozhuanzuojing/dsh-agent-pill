@@ -36,6 +36,11 @@ export const PILL_CSS = `
   --pill-shadow: 0 2px 10px rgba(0,0,0,0.45);
   --pill-shadow-side: -6px 0 24px rgba(0,0,0,0.5);
   --pill-badge-text: #101016;
+  /* GitHub-style solid diff: saturated text + clearly tinted row backgrounds. */
+  --pill-diff-add-text: #4ade80;
+  --pill-diff-add-bg: rgba(74,222,128,0.18);
+  --pill-diff-del-text: #f87171;
+  --pill-diff-del-bg: rgba(248,113,113,0.18);
 }
 body:not([data-ds-dark-theme]) {
   --pill-bg: #f6f6f9;
@@ -53,6 +58,10 @@ body:not([data-ds-dark-theme]) {
   --pill-shadow: 0 2px 10px rgba(0,0,0,0.14);
   --pill-shadow-side: -6px 0 24px rgba(0,0,0,0.16);
   --pill-badge-text: #ffffff;
+  --pill-diff-add-text: #1a7f45;
+  --pill-diff-add-bg: rgba(31,157,85,0.14);
+  --pill-diff-del-text: #c0392b;
+  --pill-diff-del-bg: rgba(214,69,69,0.14);
 }
 @keyframes pill-layer-in { from { transform: translateX(14px); opacity: 0.5; } to { transform: none; opacity: 1; } }
 @keyframes pill-layer-back { from { transform: translateX(-14px); opacity: 0.5; } to { transform: none; opacity: 1; } }
@@ -882,8 +891,12 @@ function FileRow(props: { diff: PillFileDiff; now: number }): JSX.Element {
             visible.map((row, index) => createElement('div', {
               key: index,
               style: {
-                color: row.type === 'add' ? C.green : row.type === 'del' ? C.red : C.dim,
-                background: row.type === 'add' ? 'rgba(63,185,106,0.08)' : row.type === 'del' ? 'rgba(224,90,90,0.08)' : 'transparent',
+                color: row.type === 'add' ? 'var(--pill-diff-add-text)'
+                  : row.type === 'del' ? 'var(--pill-diff-del-text)'
+                  : C.dim,
+                background: row.type === 'add' ? 'var(--pill-diff-add-bg)'
+                  : row.type === 'del' ? 'var(--pill-diff-del-bg)'
+                  : 'transparent',
                 whiteSpace: 'pre',
               },
             }, `${row.type === 'add' ? '+' : row.type === 'del' ? '-' : ' '} ${row.text}`)),

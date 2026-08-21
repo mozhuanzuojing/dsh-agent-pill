@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-pill",
-  "version": "0.14.5",
+  "version": "0.14.6",
   "description": "DSH web plugin: a ZCode-style agent activity pill (top-right status capsule) plus a popover summary panel (goal / subagents / agent status / workflow runs / background jobs) with full control verbs, toggled by Ctrl+Alt+P.",
   "license": "MIT",
   "keywords": [
