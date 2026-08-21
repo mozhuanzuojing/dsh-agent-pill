@@ -26,6 +26,7 @@ import { SubagentError } from '@deepseek-ai/dsh-subagent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { JobId, type JobSnapshot } from '@deepseek-ai/dsh-jobs'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { spawnSync } from 'node:child_process'
 import { isTrustedApiRequest } from './trust-fence.ts'
 import { PillError, readJsonBody, requireString, type PillHttpRequest, type PillHttpResponse, writeError, writeJson, writeOk } from './wire.ts'
 import { createJobOutputReplay } from './jobs-output.ts'
@@ -106,6 +107,8 @@ interface SubagentWireView {
   label?: string
   parentId?: string
   depth?: number
+  /** Stable identity color (ZCode 7-palette), derived from the id. */
+  color: string
   /** Process-local observation: when the child started (host clock). */
   startedAt?: number
   /** Process-local observation: when the child settled (host clock). */
@@ -200,12 +203,45 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
   /** The CAS ref from the payload ({id, revision}), or bad-request. */
   const requireRef = (payload: unknown): GoalRef => {
     const record = payload as Record<string, unknown> | null
-    const id = record?.id
-    const revision = record?.revision
-    if (typeof id !== 'string' || id === '' || typeof revision !== 'number' || !Number.isInteger(revision)) {
-      throw new PillError('bad-request', 'missing or invalid "id"/"revision"')
+    if (record === null) throw new PillError('bad-request', 'payload must be an object', 400)
+    const id = typeof record.id === 'string' && record.id !== '' ? record.id : undefined
+    const revision = typeof record.revision === 'number' && Number.isFinite(record.revision) ? record.revision : undefined
+    if (id === undefined || revision === undefined) {
+      throw new PillError('bad-request', 'payload must carry { id, revision }', 400)
     }
     return { id: id as GoalRef['id'], revision }
+  }
+
+  /** git status cache: sessionId → {at, status}; 10s TTL, absent when not a git repo. */
+  const gitStatusCache = new Map<string, { at: number; status: Record<string, string> }>()
+  const gitStatusOf = (sessionId: string): Record<string, string> | undefined => {
+    const cached = gitStatusCache.get(sessionId)
+    if (cached !== undefined && Date.now() - cached.at < 10_000) return cached.status
+    const cwd = ctx.sessions.get(SessionId(sessionId))?.header?.cwd
+    if (cwd === undefined) return undefined
+    try {
+      const out = spawnSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf-8', timeout: 5_000 })
+      if (out.status !== 0 || typeof out.stdout !== 'string') return undefined
+      const status: Record<string, string> = {}
+      for (const line of out.stdout.split('\n')) {
+        if (line.length < 4) continue
+        const code = line.slice(0, 2).trim()
+        if (code === '') continue
+        let path = line.slice(3)
+        // Rename entries: "R  old -> new" — record the new path.
+        const arrow = path.indexOf(' -> ')
+        if (arrow >= 0) path = path.slice(arrow + 4)
+        if (path === '') continue
+        const marker = code[0] !== ' ' ? code[0] : code[1]
+        if (marker === undefined) continue
+        status[path] = marker
+      }
+      const record = { at: Date.now(), status }
+      gitStatusCache.set(sessionId, record)
+      return Object.keys(status).length > 0 ? status : undefined
+    } catch {
+      return undefined
+    }
   }
 
   /** Translate a goal service failure into the wire error envelope. */
@@ -287,7 +323,7 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
       const rows = await subagents.listDescendants(SessionId(sessionId))
       state.entries = rows.map((row) => {
         if (row.kind === 'diagnostic') {
-          return { kind: 'diagnostic', id: row.id, reason: row.reason, depth: row.depth, parentId: row.parentId }
+          return { kind: 'diagnostic', id: row.id, reason: row.reason, depth: row.depth, parentId: row.parentId, color: tracker.colorOf(row.id) }
         }
         const tracked = tracker.subagentOf(row.id)
         return {
@@ -299,6 +335,7 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
           label: row.label,
           parentId: row.parentId,
           depth: row.depth,
+          color: tracker.colorOf(row.id),
           ...(tracked.startedAt !== undefined ? { startedAt: tracked.startedAt } : {}),
           ...(tracked.finishedAt !== undefined ? { finishedAt: tracked.finishedAt } : {}),
           ...(tracked.stopReason !== undefined ? { stopReason: tracked.stopReason } : {}),
@@ -482,6 +519,7 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
       const fileDiffs = tracker.fileDiffsOf()
       const timeline = tracker.timelineOf(sessionId)
       const turns = tracker.turnsOf(sessionId)
+      const gitStatus = gitStatusOf(sessionId)
       // Global agent fleet (tasklight / tmux-agent-sidebar style overview):
       // every live agent with its status and goal objective snippet.
       const fleet = agents !== undefined
@@ -491,6 +529,8 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
           goal: goals !== undefined ? goals.get(entry)?.objective.slice(0, 60) : undefined,
         }))
         : []
+      const currentTurn = tracker.currentTurnOf(sessionId)
+      const pendingApproval = tracker.pendingApprovalOf(sessionId)
       return {
         sessionId,
         ts: Date.now(),
@@ -502,6 +542,7 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
           ...(recentTools.length > 0 ? { recentTools } : {}),
           ...(agent !== undefined && inbox > 0 ? { inbox } : {}),
           ...(workflows.length > 0 ? { workflows } : {}),
+          ...(pendingApproval !== null ? { pendingApproval } : {}),
         },
         subagents,
         jobs: listJobs(sessionId).map((job) => ({
@@ -518,6 +559,8 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
         ...(fileDiffs.length > 0 ? { fileDiffs } : {}),
         ...(timeline.length > 0 ? { timeline } : {}),
         ...(turns.length > 0 ? { turns } : {}),
+        ...(currentTurn !== undefined ? { currentTurn } : {}),
+        ...(gitStatus !== undefined ? { gitStatus } : {}),
         ...(fleet.length > 0 ? { agents: fleet } : {}),
         services: {
           goals: goals !== undefined,

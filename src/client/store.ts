@@ -27,6 +27,7 @@ function busyOf(next: PillState): boolean {
     || next.jobs.some(j => j.status === 'running' || j.status === 'stopping')
     || (next.goal !== null && next.goal.phase === 'active')
     || (next.agent.workflows ?? []).some(run => !run.settled)
+    || next.agent.pendingApproval !== undefined
 }
 
 /** Start the shared polling loop (idempotent). */

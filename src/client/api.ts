@@ -38,6 +38,8 @@ export interface PillSubagent {
   label?: string
   parentId?: string
   depth?: number
+  /** Stable identity color (ZCode 7-palette), derived from the id. */
+  color: string
   /** Process-local observation: when the child started (host clock). */
   startedAt?: number
   /** Process-local observation: when the child settled (host clock). */
@@ -89,6 +91,8 @@ export interface PillAgent {
   /** Queued (inbox) message count. */
   inbox?: number
   workflows?: PillWorkflowRun[]
+  /** A pending approval request ({id, toolName}) awaiting the user decision. */
+  pendingApproval?: { id: string; toolName: string; ts: number }
 }
 
 /** Accumulated adapter-reported token accounting for the session. */
@@ -136,9 +140,17 @@ export interface PillActivityEvent {
   count?: number
 }
 
-/** Files one turn (instruction) handled. */
+/** One turn (round) of the session: meta facts + the files it handled. */
 export interface PillTurn {
   turn: number
+  /** Round title: user message snippet, or the first tool name. */
+  title: string
+  /** Number of tool calls during this turn. */
+  tools: number
+  /** Host clock when the turn ended, or null while open. */
+  endedAt: number | null
+  /** End reason kind (`completed|aborted|blocked|error`), or null. */
+  endReason: string | null
   files: PillFileDiff[]
 }
 
@@ -155,6 +167,10 @@ export interface PillState {
   fileDiffs?: PillFileDiff[]
   timeline?: PillActivityEvent[]
   turns?: PillTurn[]
+  /** The current (open or latest) turn number. */
+  currentTurn?: number
+  /** Git working-tree status: path → X/Y marker (`M`/`A`/`D`/`R`/`?`). */
+  gitStatus?: Record<string, string>
   agents?: PillFleetAgent[]
   services: { goals: boolean; subagents: boolean; jobs: boolean; agents: boolean; usage: boolean }
 }

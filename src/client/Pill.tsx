@@ -10,7 +10,7 @@
  */
 import { createElement, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ISessions } from '@deepseek-ai/dsh-client-runtime/client'
-import { api, PillApiError, type PillActivityEvent, type PillFileDiff, type PillJob, type PillState, type PillSubagent, type PillWorkflowRun } from './api.ts'
+import { api, PillApiError, type PillActivityEvent, type PillFileDiff, type PillJob, type PillState, type PillSubagent, type PillTurn, type PillWorkflowRun } from './api.ts'
 import { pillStore } from './store.ts'
 
 /**
@@ -200,6 +200,51 @@ function loadCapsulePos(): { x: number; y: number } | null {
 
 /* ── Drawer sections ────────────────────────────────────────────────────── */
 
+const ROUND_END_META: Record<string, { label: string; color: string }> = {
+  completed: { label: '✓', color: C.green },
+  aborted: { label: '⏹', color: C.dim },
+  blocked: { label: '⏸', color: C.yellow },
+  error: { label: '✗', color: C.red },
+}
+
+/** ZCode-style round list: one row per turn (title, tool count, end state, files). */
+function RoundList(props: { turns: PillTurn[]; now: number }): JSX.Element {
+  const { turns, now } = props
+  return createElement('div', null,
+    turns.map(turn => {
+      const open = turn.endedAt === null
+      const endMeta = open
+        ? { label: '…', color: C.yellow }
+        : ROUND_END_META[turn.endReason ?? ''] ?? { label: '·', color: C.faint }
+      return createElement('div', {
+        key: turn.turn,
+        style: {
+          marginBottom: 8,
+          paddingLeft: 8,
+          borderLeft: `2px solid ${open ? C.yellow : C.faint}`,
+          ...(open ? { background: 'rgba(217,161,59,0.06)', borderRadius: 4 } : {}),
+        },
+      },
+        createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '1px 0' } },
+          createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0, fontVariantNumeric: 'tabular-nums' } }, `#${turn.turn}`),
+          createElement('span', {
+            style: { fontSize: 11, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+            title: turn.title,
+          }, turn.title),
+          turn.tools > 0
+            ? createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0, fontVariantNumeric: 'tabular-nums' } }, `⚙${turn.tools}`)
+            : null,
+          createElement('span', { style: { color: endMeta.color, fontSize: 10, flexShrink: 0 } }, endMeta.label),
+        ),
+        turn.files.length > 0
+          ? createElement('div', { style: { marginTop: 2 } },
+            turn.files.map(file => createElement(FileRow, { key: file.path, diff: file, now })))
+          : null,
+      )
+    }),
+  )
+}
+
 function GoalCard(props: { state: PillState; onAction: () => void }): JSX.Element {
   const { state, onAction } = props
   const goal = state.goal
@@ -208,6 +253,7 @@ function GoalCard(props: { state: PillState; onAction: () => void }): JSX.Elemen
   }
   const meta = PHASE_META[goal.phase] ?? { color: C.yellow, label: 'active' }
   const disabled = goal.phase === 'complete'
+  const turns = state.turns ?? []
   const act = (fn: () => Promise<unknown>): void => {
     void fn().catch((error: unknown) => {
       console.error('[dsh-agent-pill] goal action failed:', error)
@@ -268,6 +314,13 @@ function GoalCard(props: { state: PillState; onAction: () => void }): JSX.Elemen
         color: C.red, disabled,
       }),
     ),
+    turns.length > 0
+      ? createElement('div', { style: { marginTop: 8 } },
+        createElement('div', { style: { color: C.faint, fontSize: 10, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' } },
+          'Rounds'),
+        createElement(RoundList, { turns, now: state.ts }),
+      )
+      : null,
   )
 }
 
@@ -304,10 +357,11 @@ function SubagentList(props: {
         style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', paddingLeft: indent, cursor: 'pointer' },
         title: child.id,
       },
+        // Identity dot: running → yellow, else the stable identity color.
         createElement('span', {
           style: {
             width: 7, height: 7, borderRadius: 4, flexShrink: 0,
-            background: child.activity === 'running' ? C.yellow : C.faint,
+            background: child.activity === 'running' ? C.yellow : (child.color || C.faint),
           },
         }),
         createElement('div', { style: { flex: 1, minWidth: 0 } },
@@ -740,11 +794,26 @@ function diffCounts(diff: { oldText: string | null; newText: string }): { added:
 }
 
 /** One file row inside a workflow detail: name + +/- badge, inline diff. */
+const GIT_META: Record<string, { label: string; color: string }> = {
+  M: { label: 'M', color: C.yellow },
+  A: { label: 'A', color: C.green },
+  D: { label: 'D', color: C.red },
+  R: { label: 'R', color: C.purple },
+  '?': { label: '?', color: C.faint },
+}
+
 function FileRow(props: { diff: PillFileDiff; now: number }): JSX.Element {
   const { diff, now } = props
   const [expanded, setExpanded] = useState(false)
   const [context, setContext] = useState(false)
   const [copied, setCopied] = useState(false)
+  // Git working-tree marker for this path (host aggregates `git status`).
+  const gitState = useSyncExternalStore(
+    useMemo(() => (cb: () => void) => pillStore.subscribe(cb), []),
+    useMemo(() => () => pillStore.getState(), []),
+  )
+  const gitMarker = gitState?.gitStatus?.[diff.path]
+  const gitMeta = gitMarker !== undefined ? GIT_META[gitMarker] : undefined
   const fileBase = diff.path.split(/[\\/]/).pop() ?? diff.path
   const counts = diffCounts(diff)
   const copyPath = (): void => {
@@ -762,6 +831,11 @@ function FileRow(props: { diff: PillFileDiff; now: number }): JSX.Element {
       style: { display: 'flex', alignItems: 'center', gap: 8, padding: '3px 4px', cursor: 'pointer', borderRadius: 4 },
     },
       createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, expanded ? '▾' : '▸'),
+      gitMeta !== undefined
+        ? createElement('span', {
+          style: { color: gitMeta.color, fontSize: 10, flexShrink: 0, fontWeight: 700, fontVariantNumeric: 'tabular-nums' },
+        }, gitMeta.label)
+        : null,
       createElement('span', {
         style: { fontSize: 11, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
       }, fileBase),
@@ -1060,6 +1134,7 @@ function PillRoot(): JSX.Element {
     || state.jobs.some(j => j.status === 'running' || j.status === 'stopping')
     || (state.goal !== null && state.goal.phase === 'active')
     || (state.agent.workflows ?? []).some(run => !run.settled)
+    || state.agent.pendingApproval !== undefined
   )
   const dotColor = state === null ? C.faint
     : goal?.phase === 'blocked' ? C.red
@@ -1085,13 +1160,23 @@ function PillRoot(): JSX.Element {
   const eventText = latestEvent !== undefined
     ? latestEvent.text.replace(/^tool /, '') + (latestEvent.detail !== undefined ? ` · ${latestEvent.detail}` : '')
     : ''
-  const capsuleLabel = latestEvent !== undefined && capsuleBusy
-    ? `${ACTIVITY_ICON[latestEvent.kind] ?? '·'} ${eventText}`
-    : 'AGENT'
-  const capsuleTitle = latestEvent !== undefined
-    ? `${fmtTimeOf(latestEvent.ts)} ${latestEvent.text}${latestEvent.detail !== undefined ? ` · ${latestEvent.detail}` : ''}${latestEvent.count !== undefined && latestEvent.count > 1 ? ` ×${latestEvent.count}` : ''}`
-    : capsuleBusy ? 'Agent activity — busy'
-    : 'Agent activity — idle'
+  const pendingApproval = state?.agent.pendingApproval
+  const currentTurn = state?.currentTurn
+  // v0.14.0: capsule text = ⏳ approval (needs the user) → 第N轮 · action
+  // (round progress) → latest event → AGENT.
+  const capsuleLabel = pendingApproval !== undefined
+    ? `⏳ ${pendingApproval.toolName}`
+    : latestEvent !== undefined && capsuleBusy
+      ? `${currentTurn !== undefined ? `第${currentTurn}轮 · ` : ''}${ACTIVITY_ICON[latestEvent.kind] ?? '·'} ${eventText}`
+      : 'AGENT'
+  const capsuleTitle = pendingApproval !== undefined
+    ? `Waiting for approval: ${pendingApproval.toolName}`
+    : latestEvent !== undefined
+      ? `${fmtTimeOf(latestEvent.ts)} ${latestEvent.text}${latestEvent.detail !== undefined ? ` · ${latestEvent.detail}` : ''}${latestEvent.count !== undefined && latestEvent.count > 1 ? ` ×${latestEvent.count}` : ''}`
+      : capsuleBusy ? 'Agent activity — busy'
+      : currentTurn !== undefined
+        ? `第${currentTurn}轮完成 · 目标${goal?.phase ?? '无'}`
+        : 'Agent activity — idle'
   // Resolve the top detail-layer target against the live snapshot; if it is
   // gone (list refreshed, run replaced), pop back one level.
   const detailRun = detail !== null && detail.kind === 'workflow'
@@ -1160,7 +1245,9 @@ function PillRoot(): JSX.Element {
         dragRef.current = null
         setDragging(false)
       },
-      title: `Agent activity (${counts.map(c => c.title).join(', ') || (capsuleBusy ? 'busy' : 'idle')})${toolName !== undefined && (state?.agent.toolSince !== undefined) ? ` — running ${toolName}` : ''} — drag to move, click or Ctrl+Alt+P for panel`,
+      title: pendingApproval !== undefined
+        ? `⏳ Awaiting approval: ${pendingApproval.toolName} — click to review`
+        : `Agent activity (${counts.map(c => c.title).join(', ') || (capsuleBusy ? 'busy' : 'idle')})${toolName !== undefined && (state?.agent.toolSince !== undefined) ? ` — running ${toolName}` : ''} — drag to move, click or Ctrl+Alt+P for panel`,
       'aria-label': 'Agent activity',
       'aria-pressed': consoleOpen,
       style: {

@@ -47,6 +47,31 @@ export interface TrackedSubagent {
   stopReason?: string
 }
 
+/** ZCode 7-color palette (grey/red/orange/yellow/green/blue/purple) for subagent identity dots. */
+const SUBCUT_CONSISTENT_PALETTE = ['#8b8b9c', '#e05a5a', '#d98a3b', '#d9a13b', '#3fb96a', '#5a9cf0', '#a37de8']
+
+/** First file basename for a turn with files but no meta (defensive). */
+function firstFileName(files: Map<string, FileDiffRecord>): string {
+  const first = files.values().next().value as FileDiffRecord | undefined
+  return first !== undefined ? (first.path.split(/[\\/]/).pop() ?? first.path) : 'turn'
+}
+
+/** Extract the first text snippet from a message payload (defensive). */
+function textOfMessage(data: Record<string, unknown>): string {
+  const message = typeof data.message === 'object' && data.message !== null ? data.message as Record<string, unknown> : null
+  const content = message !== null && Array.isArray(message.content) ? message.content : null
+  if (content === null) return ''
+  for (const block of content) {
+    if (typeof block !== 'object' || block === null) continue
+    const b = block as Record<string, unknown>
+    if (b.type === 'text' && typeof b.text === 'string') {
+      const text = b.text.trim().replace(/\s+/g, ' ')
+      return text.slice(0, 80)
+    }
+  }
+  return ''
+}
+
 /** One `agent()` call step inside a workflow run. */
 export interface TrackedWorkflowStep {
   /** 1-based sequence number of the call within the run. */
@@ -103,6 +128,30 @@ export interface FileDiffRecord {
   ts: number
 }
 
+/** One turn's meta facts aggregated from the session event stream (ZCode round view). */
+export interface TurnMeta {
+  /** Turn number (1-based; the session event stream's `turn` field). */
+  turn: number
+  /** Round title: the user message text snippet, or the first tool name. */
+  title: string
+  /** Number of tool calls observed during this turn. */
+  tools: number
+  /** Host clock when `turn/end` was observed, or null while open. */
+  endedAt: number | null
+  /** End reason kind from `turn/end` data (`completed|aborted|blocked|error`), or null. */
+  endReason: string | null
+}
+
+/** One wire turn row: meta + the files that turn handled (files may be absent). */
+export interface TurnWireView {
+  turn: number
+  title: string
+  tools: number
+  endedAt: number | null
+  endReason: string | null
+  files: FileDiffRecord[]
+}
+
 /** One activity-timeline event (the "eyes on the internals" feed). */
 export interface ActivityEvent {
   kind: 'tool' | 'tool-done' | 'file' | 'workflow' | 'subagent' | 'goal'
@@ -137,6 +186,10 @@ export class ActivityTracker {
   private readonly timelines = new Map<string, ActivityEvent[]>()
   /** Per-session turn → path → latest diff. */
   private readonly turnFiles = new Map<string, Map<number, Map<string, FileDiffRecord>>>()
+  /** Per-session turn → turn meta (title, tools, end reason), bounded by TURN_LIMIT. */
+  private readonly turnMeta = new Map<string, Map<number, TurnMeta>>()
+  /** Per-session pending approval requests ({id, toolName}); cleared by approval/decided. */
+  private readonly pendingApprovals = new Map<string, { id: string; toolName: string; ts: number }>()
   /** Last session that ran a tool (fs events without a session dimension land here). */
   private lastActiveSession: string | null = null
 
@@ -316,6 +369,64 @@ export class ActivityTracker {
       return
     }
 
+    // ── Round (turn) meta aggregation: title from the user message, tool
+    // count from tool/call, end reason from turn/end. This is the host-side
+    // data for the ZCode-style "round view" (one pill sees the task arc).
+    if (record.type === 'turn/start') {
+      const turn = num(data, 'turn')
+      if (turn === undefined) return
+      const byTurn = this.turnMeta.get(sessionId) ?? new Map<number, TurnMeta>()
+      if (!byTurn.has(turn)) byTurn.set(turn, { turn, title: '', tools: 0, endedAt: null, endReason: null })
+      this.turnMeta.set(sessionId, byTurn)
+      this.trimTurns(sessionId, byTurn)
+      return
+    }
+
+    if (record.type === 'user/message') {
+      const turn = num(data, 'turn')
+      if (turn === undefined) return
+      const byTurn = this.turnMeta.get(sessionId)
+      if (byTurn === undefined || !byTurn.has(turn)) return
+      const meta = byTurn.get(turn)!
+      if (meta.title === '') meta.title = textOfMessage(data)
+      return
+    }
+
+    if (record.type === 'turn/end') {
+      const turn = num(data, 'turn')
+      if (turn === undefined) return
+      const byTurn = this.turnMeta.get(sessionId)
+      const meta = byTurn?.get(turn)
+      if (meta !== undefined) {
+        meta.endedAt = Date.now()
+        const reason = typeof data.reason === 'object' && data.reason !== null
+          ? str(data.reason, 'kind')
+          : undefined
+        meta.endReason = reason ?? null
+      }
+      return
+    }
+
+    if (record.type === 'approval/asked') {
+      const id = str(data, 'id')
+      if (id === undefined) return
+      this.pendingApprovals.set(sessionId, {
+        id,
+        toolName: str(data, 'toolName') ?? 'operation',
+        ts: Date.now(),
+      })
+      this.pushActivity(sessionId, { kind: 'tool', ts: Date.now(), text: 'approval requested', detail: str(data, 'toolName') })
+      return
+    }
+
+    if (record.type === 'approval/decided') {
+      const id = str(data, 'id')
+      if (id === undefined) return
+      const pending = this.pendingApprovals.get(sessionId)
+      if (pending !== undefined && pending.id === id) this.pendingApprovals.delete(sessionId)
+      return
+    }
+
     if (record.type === 'tool/call') {
       const name = typeof data.name === 'string' && data.name !== '' ? data.name : undefined
       if (name === undefined) return
@@ -323,6 +434,15 @@ export class ActivityTracker {
       this.lastActiveSession = sessionId
       this.toolCalls.set(sessionId, { name, ts: now })
       this.currentTools.set(sessionId, { name, startedAt: now })
+      const turn = num(data, 'turn')
+      if (turn !== undefined) {
+        const byTurn = this.turnMeta.get(sessionId)
+        const meta = byTurn?.get(turn)
+        if (meta !== undefined) {
+          meta.tools += 1
+          if (meta.title === '') meta.title = name
+        }
+      }
       this.pushActivity(sessionId, { kind: 'tool', ts: now, text: `tool ${name}` })
       return
     }
@@ -438,15 +558,51 @@ export class ActivityTracker {
     return (this.timelines.get(sessionId) ?? []).map((event) => ({ ...event }))
   }
 
-  /** Files handled per turn for one session (turns with files, oldest first). */
-  turnsOf(sessionId: string): Array<{ turn: number; files: FileDiffRecord[] }> {
+  /** Turns with meta and/or files for one session (oldest first). A turn with
+   *  neither meta nor files is omitted (exists-only philosophy). */
+  turnsOf(sessionId: string): TurnWireView[] {
     const perTurn = this.turnFiles.get(sessionId)
-    if (perTurn === undefined || perTurn.size === 0) return []
-    const turns = [...perTurn.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .filter(([, files]) => files.size > 0)
-      .map(([turn, files]) => ({ turn, files: [...files.values()] }))
-    return turns
+    const meta = this.turnMeta.get(sessionId)
+    const keys = new Set<number>()
+    for (const [turn] of perTurn ?? []) keys.add(turn)
+    for (const [turn] of meta ?? []) keys.add(turn)
+    if (keys.size === 0) return []
+    return [...keys]
+      .sort((a, b) => a - b)
+      .map((turn) => {
+        const m = meta?.get(turn)
+        const files = perTurn?.get(turn)
+        if (m === undefined && (files === undefined || files.size === 0)) return null
+        return {
+          turn,
+          title: m?.title ?? (files !== undefined && files.size > 0 ? firstFileName(files) : `turn ${turn}`),
+          tools: m?.tools ?? 0,
+          endedAt: m?.endedAt ?? null,
+          endReason: m?.endReason ?? null,
+          files: files !== undefined ? [...files.values()] : [],
+        }
+      })
+      .filter((row): row is TurnWireView => row !== null)
+  }
+
+  /** The current (open or latest) turn number for one session, or undefined. */
+  currentTurnOf(sessionId: string): number | undefined {    const meta = this.turnMeta.get(sessionId)
+    if (meta !== undefined && meta.size > 0) return Math.max(...meta.keys())
+    const perTurn = this.turnFiles.get(sessionId)
+    if (perTurn !== undefined && perTurn.size > 0) return Math.max(...perTurn.keys())
+    return undefined
+  }
+
+  /** The pending approval request for one session ({id, toolName}), or null. */
+  pendingApprovalOf(sessionId: string): { id: string; toolName: string; ts: number } | null {
+    return this.pendingApprovals.get(sessionId) ?? null
+  }
+
+  /** Stable 7-color palette identity for one subagent (ZCode-style). */
+  colorOf(id: string): string {
+    let hash = 0
+    for (let i = 0; i < id.length; i += 1) hash = (hash * 31 + id.charCodeAt(i)) | 0
+    return SUBCUT_CONSISTENT_PALETTE[Math.abs(hash) % SUBCUT_CONSISTENT_PALETTE.length] ?? '#8b8b9c'
   }
 
   /** Queued (inbox) message count for one session. */
@@ -468,5 +624,13 @@ export class ActivityTracker {
     if (this.activeRun !== null && this.activeRun.id === id) return this.activeRun
     const found = this.workflowRuns.find((run) => run.id === id)
     return found ?? null
+  }
+
+  /** Trim a session's turn meta map to the newest TURN_LIMIT turns. */
+  private trimTurns(sessionId: string, byTurn: Map<number, TurnMeta>): void {
+    if (byTurn.size <= ActivityTracker.TURN_LIMIT) return
+    const oldest = byTurn.keys().next().value as number | undefined
+    if (oldest !== undefined) byTurn.delete(oldest)
+    this.turnMeta.set(sessionId, byTurn)
   }
 }

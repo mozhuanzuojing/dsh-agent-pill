@@ -34,31 +34,38 @@ DSH (DeepSeek Harness) web plugin: a ZCode-style agent activity pill (top-right 
 - **Adaptive popover width (v0.9.0)**: the popover width follows its content (clamped 320–520px, viewport-capped) via ResizeObserver; diff rows keep their width (`white-space: pre`) instead of wrapping.
 - **Activity timeline (v0.9.0)**: a new Activity section streams the recent host events (tool calls and completions, file activity with per-path merge counting, workflow phase changes, subagent starts/ends, goal changes; bounded ring of 40) — "eyes on what the agent is doing internally".
 
-## Interaction (v0.13.x, grill-me consensus)
+## Interaction (v0.14.x, grill-me consensus — ZCode researched)
 
-The plugin follows Cursor's "files under each instruction" pattern and
-ZCode's task-status visibility:
+The plugin follows ZCode's task-status visibility (goal → rounds → checklist
+items → current round) plus Cursor's "files under each instruction":
 
 1. **Turn-tail file rows** (`conversation.chat.turnTail`): each user instruction
    in the conversation shows the **files that instruction handled** (`+N`/`-N`
    badges, inline diff with changes-only/context toggle, copy path) — Claude
    Code's "Files changed" pattern, per session × turn.
-2. **Capsule = activity strip**: the pill itself shows the **latest activity
-   event** while anything is busy (`⛭ write · 0s`, `✎ Pill.tsx`, `✓ edit done`);
-   when fully idle it shrinks to a **bare dot** (v0.13.0 experiment — drag and
-   click still work) and regrows on the next activity. Click or Ctrl+Alt+P
-   toggles the popover; drag to move.
-3. **Popover** (capsule-anchored): the **activity timeline** (full feed, first
+2. **Capsule = round strip**: while busy the pill shows `第N轮 · 动作` (round
+   number + the latest activity event), **`⏳ 工具名` while an approval is
+   pending** (click to review), and the latest event otherwise; when fully idle
+   it shrinks to a **bare dot** (drag and click still work) and regrows on the
+   next activity. Click or Ctrl+Alt+P toggles the popover; drag to move.
+3. **Goal = round view (v0.14.0)**: the goal card (objective, phase, elapsed,
+   rounds bar) is followed by a **Rounds list** — one row per turn: `#轮号 ·
+   标题 · ⚙N 工具 · 校验状态` (`✓` completed / `⏸` blocked / `✗` error / `…`
+   open), with that round's **output files** inline (diffs + Git status marker
+   `M`/`A`/`D`/`R`/`?` from the host's `git status --porcelain` aggregation).
+4. **Popover** (capsule-anchored): the **activity timeline** (full feed, first
    screen) followed by the console sections — **Workflow** (recent runs with
    file-count badges; detail layer with steps and inline file diffs),
-   **Subagents** (descendant tree; detail layer with a link to the workflow
-   step that ran the child and that workflow's files), **Goal** and **Jobs**
-   (with job detail layer). All sections default expanded and remember their
-   state in `localStorage`.
+   **Subagents** (descendant tree with stable identity colors; detail layer
+   with a link to the workflow step that ran the child and that workflow's
+   files), **Goal** (round view) and **Jobs** (with job detail layer). All
+   sections default expanded and remember their state in `localStorage`.
 
-Data is **current-session only**: files are aggregated per `sessionId × turn`
-from `tool/result` diffs; the timeline is per session; sessionless events
-(workflow/subagent/fs) attach to the last active session.
+Data is **current-session only**: round meta (title, tool count, end reason)
+is aggregated from `turn/start` / `user/message` / `tool/call` / `turn/end`;
+files are aggregated per `sessionId × turn` from `tool/result` diffs; the
+timeline is per session; sessionless events (workflow/subagent/fs) attach to
+the last active session; approvals come from `approval/asked` / `approval/decided`.
 
 ## Install
 
