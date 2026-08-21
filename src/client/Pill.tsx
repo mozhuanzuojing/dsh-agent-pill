@@ -1028,21 +1028,22 @@ function PillRoot(): JSX.Element {
   // Popover geometry: anchored to the capsule, flipped to stay in viewport.
   const capsuleRef = useRef<HTMLButtonElement>(null)
   const [panelPos, setPanelPos] = useState<{ top: number; left: number } | null>(null)
-  // Adaptive width (v0.9.0): the popover follows its content's natural width,
-  // clamped between 320 and min(520, viewport-16); diff rows keep their width.
-  // The observer watches a max-content content wrapper (workflow details only,
-  // where long diff rows live), so expanding a diff widens the popover; other
-  // views keep the block layout and wrap normally.
+  // Adaptive width (v0.9.0, enlarged v0.14.3): the popover follows its
+  // content's natural width ×1.5 (a 50% increase), clamped between 480 and
+  // min(780, viewport-16); diff rows keep their width. The observer watches
+  // a max-content content wrapper (workflow details only, where long diff
+  // rows live), so expanding a diff widens the popover; other views keep
+  // the block layout and wrap normally.
   const bodyRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
-  const [panelWidth, setPanelWidth] = useState(360)
+  const [panelWidth, setPanelWidth] = useState(540)
   useEffect(() => {
     if (!consoleOpen) return
     const el = contentRef.current
     if (el === null) return
     const observer = new ResizeObserver(() => {
-      const natural = el.scrollWidth + 28
-      const next = Math.min(Math.max(natural, 320), 520, window.innerWidth - 16)
+      const natural = (el.scrollWidth + 28) * 1.5
+      const next = Math.min(Math.max(natural, 480), 780, window.innerWidth - 16)
       setPanelWidth(prev => (Math.abs(prev - next) > 4 ? next : prev))
     })
     observer.observe(el)
@@ -1054,20 +1055,21 @@ function PillRoot(): JSX.Element {
       const el = capsuleRef.current
       if (el === null) return
       const rect = el.getBoundingClientRect()
-      const width = Math.min(360, window.innerWidth - 16)
+      const width = panelWidth
       const maxHeight = Math.min(Math.floor(window.innerHeight * 0.7), window.innerHeight - 16)
       let top = rect.bottom + 8
-      let left = rect.left
-      // Flip up when there is not enough room below; right-align (shift
-      // left) when the panel would run past the right edge.
+      // Horizontally center the panel on the capsule, clamped to the viewport.
+      let left = rect.left + rect.width / 2 - width / 2
+      // Flip up when there is not enough room below.
       if (top + maxHeight > window.innerHeight - 8) top = Math.max(8, rect.top - 8 - maxHeight)
-      if (left + width > window.innerWidth - 8) left = Math.max(8, rect.right - width)
+      if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - 8 - width)
+      if (left < 8) left = 8
       setPanelPos({ top, left })
     }
     compute()
     window.addEventListener('resize', compute)
     return () => window.removeEventListener('resize', compute)
-  }, [consoleOpen])
+  }, [consoleOpen, panelWidth])
 
   // Collapsible sections, remembered in localStorage.
   const SECTION_KEY = 'dsh-agent-pill.sections'
