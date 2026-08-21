@@ -430,7 +430,7 @@ function SubagentDetail(props: {
       createElement('span', {
         style: {
           width: 8, height: 8, borderRadius: 4, flexShrink: 0,
-          background: child.activity === 'running' ? C.yellow : C.faint,
+          background: child.activity === 'running' ? C.yellow : (child.color || C.faint),
         },
       }),
       createElement('span', {
@@ -807,12 +807,17 @@ function FileRow(props: { diff: PillFileDiff; now: number }): JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const [context, setContext] = useState(false)
   const [copied, setCopied] = useState(false)
-  // Git working-tree marker for this path (host aggregates `git status`).
+  // Git working-tree marker for this path (host aggregates `git status`;
+  // diff paths may be absolute while porcelain is cwd-relative, so fall
+  // back to a basename match like the workflow-file linkage does).
   const gitState = useSyncExternalStore(
     useMemo(() => (cb: () => void) => pillStore.subscribe(cb), []),
     useMemo(() => () => pillStore.getState(), []),
   )
-  const gitMarker = gitState?.gitStatus?.[diff.path]
+  const gitStatus = gitState?.gitStatus
+  const gitMarker = gitStatus?.[diff.path] ?? (gitStatus !== undefined
+    ? Object.entries(gitStatus).find(([p]) => (p.split(/[\\/]/).pop() ?? p) === (diff.path.split(/[\\/]/).pop() ?? diff.path))?.[1]
+    : undefined)
   const gitMeta = gitMarker !== undefined ? GIT_META[gitMarker] : undefined
   const fileBase = diff.path.split(/[\\/]/).pop() ?? diff.path
   const counts = diffCounts(diff)

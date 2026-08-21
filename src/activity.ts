@@ -575,7 +575,9 @@ export class ActivityTracker {
         if (m === undefined && (files === undefined || files.size === 0)) return null
         return {
           turn,
-          title: m?.title ?? (files !== undefined && files.size > 0 ? firstFileName(files) : `turn ${turn}`),
+          title: (m?.title !== undefined && m.title !== '')
+            ? m.title
+            : (files !== undefined && files.size > 0 ? firstFileName(files) : `turn ${turn}`),
           tools: m?.tools ?? 0,
           endedAt: m?.endedAt ?? null,
           endReason: m?.endReason ?? null,
