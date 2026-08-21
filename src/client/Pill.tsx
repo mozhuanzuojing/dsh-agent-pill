@@ -37,10 +37,10 @@ export const PILL_CSS = `
   --pill-shadow-side: -6px 0 24px rgba(0,0,0,0.5);
   --pill-badge-text: #101016;
   /* GitHub-style solid diff: saturated text + clearly tinted row backgrounds. */
-  --pill-diff-add-text: #4ade80;
-  --pill-diff-add-bg: rgba(74,222,128,0.18);
-  --pill-diff-del-text: #f87171;
-  --pill-diff-del-bg: rgba(248,113,113,0.18);
+  --pill-diff-add-text: #7ee787;
+  --pill-diff-add-bg: rgba(126,231,135,0.20);
+  --pill-diff-del-text: #ffa198;
+  --pill-diff-del-bg: rgba(255,161,152,0.20);
 }
 body:not([data-ds-dark-theme]) {
   --pill-bg: #f6f6f9;
@@ -58,10 +58,11 @@ body:not([data-ds-dark-theme]) {
   --pill-shadow: 0 2px 10px rgba(0,0,0,0.14);
   --pill-shadow-side: -6px 0 24px rgba(0,0,0,0.16);
   --pill-badge-text: #ffffff;
-  --pill-diff-add-text: #1a7f45;
-  --pill-diff-add-bg: rgba(31,157,85,0.14);
-  --pill-diff-del-text: #c0392b;
-  --pill-diff-del-bg: rgba(214,69,69,0.14);
+  /* GitHub light: solid e6ffec / ffebe9 grounds with deep accent text. */
+  --pill-diff-add-text: #116329;
+  --pill-diff-add-bg: #e6ffec;
+  --pill-diff-del-text: #82071e;
+  --pill-diff-del-bg: #ffebe9;
 }
 @keyframes pill-layer-in { from { transform: translateX(14px); opacity: 0.5; } to { transform: none; opacity: 1; } }
 @keyframes pill-layer-back { from { transform: translateX(-14px); opacity: 0.5; } to { transform: none; opacity: 1; } }
