@@ -56,10 +56,12 @@ function firstFileName(files: Map<string, FileDiffRecord>): string {
   return first !== undefined ? (first.path.split(/[\\/]/).pop() ?? first.path) : 'turn'
 }
 
-/** Extract the first text snippet from a message payload (defensive). */
+/** Extract the first text snippet from a message payload (defensive). The
+ *  user/message data IS the message ({role, content}), while assistant/message
+ *  wraps it as {message}: accept both shapes. */
 function textOfMessage(data: Record<string, unknown>): string {
-  const message = typeof data.message === 'object' && data.message !== null ? data.message as Record<string, unknown> : null
-  const content = message !== null && Array.isArray(message.content) ? message.content : null
+  const message = typeof data.message === 'object' && data.message !== null ? data.message as Record<string, unknown> : data
+  const content = Array.isArray(message.content) ? message.content : null
   if (content === null) return ''
   for (const block of content) {
     if (typeof block !== 'object' || block === null) continue
@@ -190,6 +192,10 @@ export class ActivityTracker {
   private readonly turnMeta = new Map<string, Map<number, TurnMeta>>()
   /** Per-session pending approval requests ({id, toolName}); cleared by approval/decided. */
   private readonly pendingApprovals = new Map<string, { id: string; toolName: string; ts: number }>()
+  /** Per-session open turn (set by turn/start, cleared by turn/end): user/message
+   *  carries NO turn field (its data IS the message), so title attribution uses
+   *  the stream order. */
+  private readonly openTurn = new Map<string, number>()
   /** Last session that ran a tool (fs events without a session dimension land here). */
   private lastActiveSession: string | null = null
 
@@ -375,6 +381,7 @@ export class ActivityTracker {
     if (record.type === 'turn/start') {
       const turn = num(data, 'turn')
       if (turn === undefined) return
+      this.openTurn.set(sessionId, turn)
       const byTurn = this.turnMeta.get(sessionId) ?? new Map<number, TurnMeta>()
       if (!byTurn.has(turn)) byTurn.set(turn, { turn, title: '', tools: 0, endedAt: null, endReason: null })
       this.turnMeta.set(sessionId, byTurn)
@@ -383,7 +390,8 @@ export class ActivityTracker {
     }
 
     if (record.type === 'user/message') {
-      const turn = num(data, 'turn')
+      // data IS the user message (no turn wrapper); attribute by stream order.
+      const turn = num(data, 'turn') ?? this.openTurn.get(sessionId)
       if (turn === undefined) return
       const byTurn = this.turnMeta.get(sessionId)
       if (byTurn === undefined || !byTurn.has(turn)) return
@@ -395,6 +403,7 @@ export class ActivityTracker {
     if (record.type === 'turn/end') {
       const turn = num(data, 'turn')
       if (turn === undefined) return
+      this.openTurn.delete(sessionId)
       const byTurn = this.turnMeta.get(sessionId)
       const meta = byTurn?.get(turn)
       if (meta !== undefined) {

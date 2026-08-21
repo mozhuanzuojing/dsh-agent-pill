@@ -1180,7 +1180,7 @@ function PillRoot(): JSX.Element {
       ? `${fmtTimeOf(latestEvent.ts)} ${latestEvent.text}${latestEvent.detail !== undefined ? ` · ${latestEvent.detail}` : ''}${latestEvent.count !== undefined && latestEvent.count > 1 ? ` ×${latestEvent.count}` : ''}`
       : capsuleBusy ? 'Agent activity — busy'
       : currentTurn !== undefined
-        ? `第${currentTurn}轮完成 · 目标${goal?.phase ?? '无'}`
+        ? `第${currentTurn}轮完成${goal !== null ? ` · 目标${goal.phase}` : ''}`
         : 'Agent activity — idle'
   // Resolve the top detail-layer target against the live snapshot; if it is
   // gone (list refreshed, run replaced), pop back one level.
