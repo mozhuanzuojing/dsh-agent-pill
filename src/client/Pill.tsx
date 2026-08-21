@@ -1090,6 +1090,7 @@ function PillRoot(): JSX.Element {
     : 'AGENT'
   const capsuleTitle = latestEvent !== undefined
     ? `${fmtTimeOf(latestEvent.ts)} ${latestEvent.text}${latestEvent.detail !== undefined ? ` · ${latestEvent.detail}` : ''}${latestEvent.count !== undefined && latestEvent.count > 1 ? ` ×${latestEvent.count}` : ''}`
+    : capsuleBusy ? 'Agent activity — busy'
     : 'Agent activity — idle'
   // Resolve the top detail-layer target against the live snapshot; if it is
   // gone (list refreshed, run replaced), pop back one level.
@@ -1159,7 +1160,7 @@ function PillRoot(): JSX.Element {
         dragRef.current = null
         setDragging(false)
       },
-      title: `Agent activity (${counts.map(c => c.title).join(', ') || 'idle'})${toolName !== undefined && (state?.agent.toolSince !== undefined) ? ` — running ${toolName}` : ''} — drag to move, click or Ctrl+Alt+P for panel`,
+      title: `Agent activity (${counts.map(c => c.title).join(', ') || (capsuleBusy ? 'busy' : 'idle')})${toolName !== undefined && (state?.agent.toolSince !== undefined) ? ` — running ${toolName}` : ''} — drag to move, click or Ctrl+Alt+P for panel`,
       'aria-label': 'Agent activity',
       'aria-pressed': consoleOpen,
       style: {
