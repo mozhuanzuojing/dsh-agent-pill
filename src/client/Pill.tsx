@@ -79,9 +79,9 @@ const C = {
 /** Shared label rows: value + optional hint. */
 function Row(props: { label: string; value: string; color?: string }): JSX.Element {
   return createElement('div', { style: rowStyle },
-    createElement('span', { style: { color: C.faint, fontSize: 11, minWidth: 64 } }, props.label),
+    createElement('span', { style: { color: C.faint, fontSize: 13, minWidth: 64 } }, props.label),
     createElement('span', {
-      style: { color: props.color ?? C.text, fontSize: 12, fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace' },
+      style: { color: props.color ?? C.text, fontSize: 14, fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace' },
     }, props.value),
   )
 }
@@ -102,7 +102,7 @@ function Section(props: {
       : {}),
   },
     createElement('span', {
-      style: { color: C.faint, fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase' as const },
+      style: { color: C.faint, fontSize: 12, letterSpacing: '0.08em', textTransform: 'uppercase' as const },
     }, `${collapsible ? (props.collapsed === true ? '▸ ' : '▾ ') : ''}${props.title}${props.count !== undefined ? ` (${props.count})` : ''}`),
     props.right ?? null,
   )
@@ -130,11 +130,11 @@ const sectionStyle: React.CSSProperties = {
 }
 const iconButtonStyle: React.CSSProperties = {
   background: 'transparent', border: `1px solid ${C.border}`, borderRadius: 5,
-  color: C.text, fontSize: 11, padding: '3px 8px', cursor: 'pointer', lineHeight: 1.2,
+  color: C.text, fontSize: 13, padding: '3px 8px', cursor: 'pointer', lineHeight: 1.2,
 }
 const iconButtonStyleSmall: React.CSSProperties = {
   ...iconButtonStyle,
-  padding: '1px 6px', fontSize: 10, color: C.dim,
+  padding: '1px 6px', fontSize: 12, color: C.dim,
 }
 
 /** Phase → color + Chinese/English label mapping. */
@@ -226,15 +226,15 @@ function RoundList(props: { turns: PillTurn[]; now: number }): JSX.Element {
         },
       },
         createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '1px 0' } },
-          createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0, fontVariantNumeric: 'tabular-nums' } }, `#${turn.turn}`),
+          createElement('span', { style: { color: C.faint, fontSize: 12, flexShrink: 0, fontVariantNumeric: 'tabular-nums' } }, `#${turn.turn}`),
           createElement('span', {
-            style: { fontSize: 11, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+            style: { fontSize: 13, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
             title: turn.title,
           }, turn.title),
           turn.tools > 0
-            ? createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0, fontVariantNumeric: 'tabular-nums' } }, `⚙${turn.tools}`)
+            ? createElement('span', { style: { color: C.faint, fontSize: 12, flexShrink: 0, fontVariantNumeric: 'tabular-nums' } }, `⚙${turn.tools}`)
             : null,
-          createElement('span', { style: { color: endMeta.color, fontSize: 10, flexShrink: 0 } }, endMeta.label),
+          createElement('span', { style: { color: endMeta.color, fontSize: 12, flexShrink: 0 } }, endMeta.label),
         ),
         turn.files.length > 0
           ? createElement('div', { style: { marginTop: 2 } },
@@ -249,7 +249,7 @@ function GoalCard(props: { state: PillState; onAction: () => void }): JSX.Elemen
   const { state, onAction } = props
   const goal = state.goal
   if (goal === null) {
-    return createElement('div', { style: { color: C.faint, fontSize: 12, padding: '4px 0' } }, 'No goal set')
+    return createElement('div', { style: { color: C.faint, fontSize: 14, padding: '4px 0' } }, 'No goal set')
   }
   const meta = PHASE_META[goal.phase] ?? { color: C.yellow, label: 'active' }
   const disabled = goal.phase === 'complete'
@@ -268,18 +268,18 @@ function GoalCard(props: { state: PillState; onAction: () => void }): JSX.Elemen
       }),
       createElement('span', {
         style: {
-          fontSize: 12, color: C.text, fontWeight: 600, overflow: 'hidden',
+          fontSize: 14, color: C.text, fontWeight: 600, overflow: 'hidden',
           textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
         },
         title: goal.objective,
       }, goal.objective),
     ),
     createElement('div', { style: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 6 } },
-      createElement('span', { style: { color: meta.color, fontSize: 10, border: `1px solid ${meta.color}`, borderRadius: 4, padding: '0 5px', lineHeight: '15px' } }, meta.label),
-      createElement('span', { style: { color: C.faint, fontSize: 11 } },
+      createElement('span', { style: { color: meta.color, fontSize: 12, border: `1px solid ${meta.color}`, borderRadius: 4, padding: '0 5px', lineHeight: '17px' } }, meta.label),
+      createElement('span', { style: { color: C.faint, fontSize: 13 } },
         `round ${goal.roundsStarted}/${goal.maxGoalRounds} · elapsed ${fmtDur(goal.createdAt, state.ts)}`),
       goal.activation !== undefined
-        ? createElement('span', { style: { color: C.faint, fontSize: 10 } }, `activation: ${goal.activation}`)
+        ? createElement('span', { style: { color: C.faint, fontSize: 12 } }, `activation: ${goal.activation}`)
         : null,
     ),
     goal.maxGoalRounds > 0
@@ -297,7 +297,7 @@ function GoalCard(props: { state: PillState; onAction: () => void }): JSX.Elemen
       )
       : null,
     goal.blockedReason !== undefined
-      ? createElement('div', { style: { color: C.red, fontSize: 11, marginBottom: 6 } }, goal.blockedReason.message)
+      ? createElement('div', { style: { color: C.red, fontSize: 13, marginBottom: 6 } }, goal.blockedReason.message)
       : null,
     createElement('div', { style: { display: 'flex', gap: 6 } },
       goal.phase === 'active'
@@ -316,7 +316,7 @@ function GoalCard(props: { state: PillState; onAction: () => void }): JSX.Elemen
     ),
     turns.length > 0
       ? createElement('div', { style: { marginTop: 8 } },
-        createElement('div', { style: { color: C.faint, fontSize: 10, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' } },
+        createElement('div', { style: { color: C.faint, fontSize: 12, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' } },
           'Rounds'),
         createElement(RoundList, { turns, now: state.ts }),
       )
@@ -333,7 +333,7 @@ function SubagentList(props: {
   const children = state.subagents.filter((s): s is PillSubagent & { kind: 'child' } => s.kind === 'child')
   const diagnostics = state.subagents.filter(s => s.kind === 'diagnostic')
   if (children.length === 0 && diagnostics.length === 0) {
-    return createElement('div', { style: { color: C.faint, fontSize: 12, padding: '4px 0' } }, 'No subagents')
+    return createElement('div', { style: { color: C.faint, fontSize: 14, padding: '4px 0' } }, 'No subagents')
   }
   const stop = (childId: string): void => {
     void api.subagentInterrupt(state.sessionId, childId)
@@ -366,10 +366,10 @@ function SubagentList(props: {
         }),
         createElement('div', { style: { flex: 1, minWidth: 0 } },
           createElement('div', {
-            style: { fontSize: 12, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+            style: { fontSize: 14, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
             title: child.id,
           }, child.label ?? child.id),
-          createElement('div', { style: { color: metaColor, fontSize: 10 } },
+          createElement('div', { style: { color: metaColor, fontSize: 12 } },
             `${child.mode ?? 'one-shot'} · ${child.activity ?? 'inactive'}${elapsed}${settled}`),
         ),
         createElement('button', {
@@ -384,7 +384,7 @@ function SubagentList(props: {
       )
     }),
     ...diagnostics.map((d) => createElement('div', {
-      key: d.id, style: { color: C.red, fontSize: 11, padding: '2px 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      key: d.id, style: { color: C.red, fontSize: 13, padding: '2px 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
       title: d.id,
     }, `unreadable: ${d.reason} (${d.id})`)),
   ])
@@ -434,7 +434,7 @@ function SubagentDetail(props: {
         },
       }),
       createElement('span', {
-        style: { fontSize: 13, color: C.text, fontWeight: 700, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+        style: { fontSize: 15, color: C.text, fontWeight: 700, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
       }, child.label ?? child.id),
     ),
     createElement(Row, { label: 'id', value: child.id, color: C.faint }),
@@ -457,7 +457,7 @@ function SubagentDetail(props: {
       : null,
     linkedStep !== undefined
       ? createElement('div', null,
-        createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 12, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, 'Workflow step'),
+        createElement('div', { style: { color: C.faint, fontSize: 12, marginTop: 12, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, 'Workflow step'),
         createElement('div', {
           onClick: () => onOpenWorkflow(linkedStep.run),
           style: {
@@ -466,21 +466,21 @@ function SubagentDetail(props: {
           },
           title: linkedStep.run.id,
         },
-          createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, `#${linkedStep.step.seq}`),
+          createElement('span', { style: { color: C.faint, fontSize: 12, flexShrink: 0 } }, `#${linkedStep.step.seq}`),
           createElement('span', {
-            style: { fontSize: 11, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+            style: { fontSize: 13, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
           }, linkedStep.run.name),
           linkedStep.step.phase !== undefined
-            ? createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, linkedStep.step.phase)
+            ? createElement('span', { style: { color: C.faint, fontSize: 12, flexShrink: 0 } }, linkedStep.step.phase)
             : null,
           linkedStep.step.outcome !== undefined
-            ? createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, linkedStep.step.outcome)
+            ? createElement('span', { style: { color: C.faint, fontSize: 12, flexShrink: 0 } }, linkedStep.step.outcome)
             : null,
-          createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, '›'),
+          createElement('span', { style: { color: C.faint, fontSize: 12, flexShrink: 0 } }, '›'),
         ),
         linkedFiles.length > 0
           ? createElement('div', null,
-            createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 8, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, 'Workflow files'),
+            createElement('div', { style: { color: C.faint, fontSize: 12, marginTop: 8, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, 'Workflow files'),
             linkedFiles.map(file => createElement(FileRow, { key: file.path, diff: file, now: Date.now() })),
           )
           : null,
@@ -507,13 +507,13 @@ function JobRow(props: { job: PillJob; now: number; onOpen: (job: PillJob) => vo
     createElement('span', { style: { width: 7, height: 7, borderRadius: 4, background: statusColor, flexShrink: 0 } }),
     createElement('div', { style: { flex: 1, minWidth: 0 } },
       createElement('div', {
-        style: { fontSize: 12, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+        style: { fontSize: 14, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
         title: `${job.id} · ${job.label}`,
       }, job.label),
-      createElement('div', { style: { color: C.faint, fontSize: 10 } },
+      createElement('div', { style: { color: C.faint, fontSize: 12 } },
         `${job.id} · ${job.status}${job.detail !== undefined ? ` · ${job.detail}` : ''}${timing}`),
     ),
-    createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, '›'),
+    createElement('span', { style: { color: C.faint, fontSize: 12, flexShrink: 0 } }, '›'),
   )
 }
 
@@ -549,7 +549,7 @@ function JobDetail(props: { job: PillJob; sessionId: string; ts: number; onActio
     createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', marginBottom: 6 } },
       createElement('span', { style: { width: 8, height: 8, borderRadius: 4, background: statusColor, flexShrink: 0 } }),
       createElement('span', {
-        style: { fontSize: 13, color: C.text, fontWeight: 700, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+        style: { fontSize: 15, color: C.text, fontWeight: 700, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
       }, job.label),
     ),
     createElement(Row, { label: 'id', value: job.id, color: C.faint }),
@@ -567,18 +567,18 @@ function JobDetail(props: { job: PillJob; sessionId: string; ts: number; onActio
         createElement(IconButton, { label: 'Kill', onClick: kill, color: C.red, disabled: busy }),
       )
       : null,
-    createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 12, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, 'Output'),
+    createElement('div', { style: { color: C.faint, fontSize: 12, marginTop: 12, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, 'Output'),
     output === 'loading'
-      ? createElement('div', { style: { color: C.faint, fontSize: 11, padding: '2px 0' } }, 'loading…')
+      ? createElement('div', { style: { color: C.faint, fontSize: 13, padding: '2px 0' } }, 'loading…')
       : output !== null
         ? createElement('pre', {
           style: {
             margin: '4px 0 0', padding: 8, background: C.bg, border: `1px solid ${C.border}`,
-            borderRadius: 5, fontSize: 11, lineHeight: 1.45, color: C.text,
+            borderRadius: 5, fontSize: 13, lineHeight: 1.45, color: C.text,
             whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 320, overflow: 'auto',
           },
         }, output.text === '' ? (output.read ? '(no readable output yet)' : '(model has not read this job)') : output.text + (output.truncated ? '\n…(truncated)' : ''))
-        : createElement('div', { style: { color: C.faint, fontSize: 11, padding: '2px 0' } }, 'unavailable'),
+        : createElement('div', { style: { color: C.faint, fontSize: 13, padding: '2px 0' } }, 'unavailable'),
   )
 }
 
@@ -611,20 +611,20 @@ function WorkflowRow(props: {
   },
     createElement('span', { style: { width: 7, height: 7, borderRadius: 4, background: statusColor, flexShrink: 0 } }),
     createElement('span', {
-      style: { fontSize: 12, color: C.text, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+      style: { fontSize: 14, color: C.text, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
     }, run.name),
     run.files.length > 0
       ? createElement('span', {
         style: {
-          fontSize: 10, color: C.purple, border: `1px solid ${C.purple}`, borderRadius: 4,
-          padding: '0 5px', lineHeight: '15px', flexShrink: 0,
+          fontSize: 12, color: C.purple, border: `1px solid ${C.purple}`, borderRadius: 4,
+          padding: '0 5px', lineHeight: '17px', flexShrink: 0,
         },
         title: `${run.files.length} file${run.files.length > 1 ? 's' : ''}`,
       }, `📄${run.files.length}`)
       : null,
-    createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } },
+    createElement('span', { style: { color: C.faint, fontSize: 12, flexShrink: 0 } },
       `${run.settled ? (run.stopReason ?? 'ended') : (run.phase ?? 'starting')} · ${fmtDur(run.startedAt, ts)}`),
-    createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, '›'),
+    createElement('span', { style: { color: C.faint, fontSize: 12, flexShrink: 0 } }, '›'),
   )
 }
 
@@ -659,7 +659,7 @@ function WorkflowDetail(props: {
   return createElement('div', null,
     createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', marginBottom: 6 } },
       createElement('span', { style: { width: 8, height: 8, borderRadius: 4, background: statusColor, flexShrink: 0 } }),
-      createElement('span', { style: { fontSize: 13, color: C.text, fontWeight: 700, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, run.name),
+      createElement('span', { style: { fontSize: 15, color: C.text, fontWeight: 700, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, run.name),
     ),
     createElement(Row, { label: 'id', value: run.id, color: C.faint }),
     createElement(Row, {
@@ -668,9 +668,9 @@ function WorkflowDetail(props: {
       color: statusColor,
     }),
     createElement(Row, { label: 'elapsed', value: fmtDur(run.startedAt, ts), color: C.text }),
-    createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 10, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, `Steps (${run.steps.length})`),
+    createElement('div', { style: { color: C.faint, fontSize: 12, marginTop: 10, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, `Steps (${run.steps.length})`),
     run.steps.length === 0
-      ? createElement('div', { style: { color: C.faint, fontSize: 11, padding: '2px 0' } }, 'no agent calls observed')
+      ? createElement('div', { style: { color: C.faint, fontSize: 13, padding: '2px 0' } }, 'no agent calls observed')
       : run.steps.map((step) => {
         const linked = stepMeta(step.childId)
         const linkable = step.childId !== undefined && subagents.some(s => s.id === step.childId)
@@ -683,27 +683,27 @@ function WorkflowDetail(props: {
           },
           title: linkable ? 'Open subagent detail' : (step.childId ?? step.label),
         },
-          createElement('span', { style: { color: C.faint, fontSize: 10, minWidth: 22, fontVariantNumeric: 'tabular-nums' } }, `#${step.seq}`),
+          createElement('span', { style: { color: C.faint, fontSize: 12, minWidth: 22, fontVariantNumeric: 'tabular-nums' } }, `#${step.seq}`),
           createElement('span', {
-            style: { fontSize: 12, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+            style: { fontSize: 14, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
           }, step.label),
           step.phase !== undefined
-            ? createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, step.phase)
+            ? createElement('span', { style: { color: C.faint, fontSize: 12, flexShrink: 0 } }, step.phase)
             : null,
           linked.detail !== ''
-            ? createElement('span', { style: { color: linked.color, fontSize: 10, flexShrink: 0 } }, linked.detail.trim())
+            ? createElement('span', { style: { color: linked.color, fontSize: 12, flexShrink: 0 } }, linked.detail.trim())
             : null,
           step.outcome !== undefined
-            ? createElement('span', { style: { color: outcomeColor(step.outcome), fontSize: 10, flexShrink: 0 } }, step.outcome)
+            ? createElement('span', { style: { color: outcomeColor(step.outcome), fontSize: 12, flexShrink: 0 } }, step.outcome)
             : null,
           linkable
-            ? createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, '›')
+            ? createElement('span', { style: { color: C.faint, fontSize: 12, flexShrink: 0 } }, '›')
             : null,
         )
       }),
     run.files.length > 0
       ? createElement('div', null,
-        createElement('div', { style: { color: C.faint, fontSize: 10, marginTop: 10, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, `Files (${run.files.length})`),
+        createElement('div', { style: { color: C.faint, fontSize: 12, marginTop: 10, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } }, `Files (${run.files.length})`),
         run.files.map((file) => {
           // The fs feed reports absolute display paths, while tool/result
           // diffs carry the model-facing path (relative to the workspace) —
@@ -714,9 +714,9 @@ function WorkflowDetail(props: {
           if (diff === undefined) {
             // File observed but no collected diff (read-only activity).
             return createElement('div', { key: file, style: { display: 'flex', alignItems: 'center', gap: 8, padding: '3px 4px' } },
-              createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, '·'),
+              createElement('span', { style: { color: C.faint, fontSize: 12, flexShrink: 0 } }, '·'),
               createElement('span', {
-                style: { fontSize: 11, color: C.faint, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+                style: { fontSize: 13, color: C.faint, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
                 title: file,
               }, fileBase(file)),
             )
@@ -835,20 +835,20 @@ function FileRow(props: { diff: PillFileDiff; now: number }): JSX.Element {
       title: diff.path,
       style: { display: 'flex', alignItems: 'center', gap: 8, padding: '3px 4px', cursor: 'pointer', borderRadius: 4 },
     },
-      createElement('span', { style: { color: C.faint, fontSize: 10, flexShrink: 0 } }, expanded ? '▾' : '▸'),
+      createElement('span', { style: { color: C.faint, fontSize: 12, flexShrink: 0 } }, expanded ? '▾' : '▸'),
       gitMeta !== undefined
         ? createElement('span', {
-          style: { color: gitMeta.color, fontSize: 10, flexShrink: 0, fontWeight: 700, fontVariantNumeric: 'tabular-nums' },
+          style: { color: gitMeta.color, fontSize: 12, flexShrink: 0, fontWeight: 700, fontVariantNumeric: 'tabular-nums' },
         }, gitMeta.label)
         : null,
       createElement('span', {
-        style: { fontSize: 11, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+        style: { fontSize: 13, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
       }, fileBase),
       counts.added > 0
-        ? createElement('span', { style: { color: C.green, fontSize: 10, flexShrink: 0, fontVariantNumeric: 'tabular-nums' } }, `+${counts.added}`)
+        ? createElement('span', { style: { color: C.green, fontSize: 12, flexShrink: 0, fontVariantNumeric: 'tabular-nums' } }, `+${counts.added}`)
         : null,
       counts.removed > 0
-        ? createElement('span', { style: { color: C.red, fontSize: 10, flexShrink: 0, fontVariantNumeric: 'tabular-nums' } }, `-${counts.removed}`)
+        ? createElement('span', { style: { color: C.red, fontSize: 12, flexShrink: 0, fontVariantNumeric: 'tabular-nums' } }, `-${counts.removed}`)
         : null,
       createElement('button', {
         onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -877,8 +877,8 @@ function FileRow(props: { diff: PillFileDiff; now: number }): JSX.Element {
           }, context ? 'changes only' : 'with context'),
         ),
         visible.length === 0
-          ? createElement('div', { style: { color: C.faint, fontSize: 10 } }, '(no line changes)')
-          : createElement('pre', { style: { margin: 0, fontSize: 11, lineHeight: 1.45 } },
+          ? createElement('div', { style: { color: C.faint, fontSize: 12 } }, '(no line changes)')
+          : createElement('pre', { style: { margin: 0, fontSize: 13, lineHeight: 1.45 } },
             visible.map((row, index) => createElement('div', {
               key: index,
               style: {
@@ -890,7 +890,7 @@ function FileRow(props: { diff: PillFileDiff; now: number }): JSX.Element {
           ),
       )
       : null,
-    createElement('div', { style: { color: C.faint, fontSize: 9, margin: '0 0 4px 18px' } },
+    createElement('div', { style: { color: C.faint, fontSize: 11, margin: '0 0 4px 18px' } },
       `${fmtAgo(diff.ts, now)} ago`),
   )
 }
@@ -916,11 +916,11 @@ function ActivityList(props: { timeline: PillActivityEvent[] }): JSX.Element {
         style: { display: 'flex', alignItems: 'baseline', gap: 8, padding: '2px 0' },
       },
         createElement('span', {
-          style: { color: C.faint, fontSize: 9, flexShrink: 0, fontVariantNumeric: 'tabular-nums' },
+          style: { color: C.faint, fontSize: 11, flexShrink: 0, fontVariantNumeric: 'tabular-nums' },
         }, fmtTimeOf(event.ts)),
-        createElement('span', { style: { color: meta.color, fontSize: 11, flexShrink: 0 } }, meta.icon),
+        createElement('span', { style: { color: meta.color, fontSize: 13, flexShrink: 0 } }, meta.icon),
         createElement('span', {
-          style: { fontSize: 11, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+          style: { fontSize: 13, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
           title: event.detail ?? event.text,
         }, event.text + suffix),
       )
@@ -1280,7 +1280,7 @@ function PillRoot(): JSX.Element {
       capsuleBusy
         ? createElement('span', {
           style: {
-            color: C.text, fontSize: 12, fontWeight: 600, letterSpacing: '0.02em',
+            color: C.text, fontSize: 14, fontWeight: 600, letterSpacing: '0.02em',
             maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           },
           title: capsuleTitle,
@@ -1288,7 +1288,7 @@ function PillRoot(): JSX.Element {
         : null,
       capsuleBusy && goal !== null && goal.phase !== 'complete'
         ? createElement('span', {
-          style: { color: C.faint, fontSize: 10, fontVariantNumeric: 'tabular-nums' },
+          style: { color: C.faint, fontSize: 12, fontVariantNumeric: 'tabular-nums' },
           title: `goal running for ${fmtDur(goal.createdAt, state?.ts ?? Date.now())}`,
         }, `⏱ ${fmtDur(goal.createdAt, state?.ts ?? Date.now())}`)
         : null,
@@ -1296,7 +1296,7 @@ function PillRoot(): JSX.Element {
         key: index,
         style: {
           minWidth: 16, height: 16, borderRadius: 8, background: count.color, color: 'var(--pill-badge-text)',
-          fontSize: 10, fontWeight: 700, display: 'inline-flex', alignItems: 'center',
+          fontSize: 12, fontWeight: 700, display: 'inline-flex', alignItems: 'center',
           justifyContent: 'center', padding: '0 5px',
         },
         title: count.title,
@@ -1327,24 +1327,24 @@ function PillRoot(): JSX.Element {
                 onClick: popLayer,
                 'aria-label': 'Back',
                 title: 'Back',
-                style: { ...iconButtonStyle, fontSize: 13, padding: '2px 9px', flexShrink: 0 },
+                style: { ...iconButtonStyle, fontSize: 15, padding: '2px 9px', flexShrink: 0 },
               }, '←'),
               createElement('span', {
-                style: { color: C.text, fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+                style: { color: C.text, fontSize: 15, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
               }, detail.kind === 'workflow' ? (detailRun?.name ?? 'Workflow')
                 : detail.kind === 'subagent' ? (detailChild?.label ?? 'Subagent')
                 : (detailJob?.label ?? 'Job')),
             )
             : createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
               createElement('span', { style: { width: 9, height: 9, borderRadius: 5, background: dotColor } }),
-              createElement('span', { style: { color: C.text, fontSize: 13, fontWeight: 700 } }, 'Agent Activity'),
+              createElement('span', { style: { color: C.text, fontSize: 15, fontWeight: 700 } }, 'Agent Activity'),
               state !== null
-                ? createElement('span', { style: { color: C.faint, fontSize: 10 } }, state.sessionId)
+                ? createElement('span', { style: { color: C.faint, fontSize: 12 } }, state.sessionId)
                 : null,
             ),
           createElement('button', {
             onClick: () => pillStore.setConsoleOpen(false), 'aria-label': 'Close', title: 'Close (Esc / Ctrl+Alt+P)',
-            style: { ...iconButtonStyle, fontSize: 13, padding: '2px 9px' },
+            style: { ...iconButtonStyle, fontSize: 15, padding: '2px 9px' },
           }, '✕'),
         ),
         // ── Scrollable body: job detail layer (pushed) or the console view ──
@@ -1359,7 +1359,7 @@ function PillRoot(): JSX.Element {
             style: { minWidth: '100%' },
           },
           state === null
-            ? createElement('div', { style: { color: C.faint, fontSize: 12, padding: '16px 0' } },
+            ? createElement('div', { style: { color: C.faint, fontSize: 14, padding: '16px 0' } },
               sessionId === undefined ? 'No active conversation' : 'Loading…')
             : detail !== null && detail.kind === 'workflow' && detailRun !== undefined
               ? createElement(WorkflowDetail, {
@@ -1461,7 +1461,7 @@ function PillRoot(): JSX.Element {
                 : null,
               !state.services.goals || !state.services.subagents || !state.services.jobs
                 ? createElement('div', {
-                  style: { marginTop: 14, color: C.faint, fontSize: 10, lineHeight: 1.5 },
+                  style: { marginTop: 14, color: C.faint, fontSize: 12, lineHeight: 1.5 },
                 }, `Optional services: goals=${state.services.goals ? 'on' : 'off'} · subagents=${state.services.subagents ? 'on' : 'off'} · jobs=${state.services.jobs ? 'on' : 'off'}`)
                 : null,
             ),
@@ -1505,10 +1505,11 @@ export function TurnTailFiles(props: any): JSX.Element | null {
   return createElement('div', {
     style: { padding: '2px 0 6px', marginTop: 2 },
   },
-    createElement('div', { style: { color: C.faint, fontSize: 10, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } },
+    createElement('div', { style: { color: C.faint, fontSize: 12, marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' } },
       `Files changed (${entry.files.length})`),
     entry.files.map(file => createElement(FileRow, { key: file.path, diff: file, now: Date.now() })),
   )
 }
 
 export { PillRoot }
+
