@@ -1029,11 +1029,12 @@ function PillRoot(): JSX.Element {
   const capsuleRef = useRef<HTMLButtonElement>(null)
   const [panelPos, setPanelPos] = useState<{ top: number; left: number } | null>(null)
   // Adaptive width (v0.9.0, enlarged v0.14.3): the popover follows its
-  // content's natural width ×1.5 (a 50% increase), clamped between 480 and
-  // min(780, viewport-16); diff rows keep their width. The observer watches
-  // a max-content content wrapper (workflow details only, where long diff
-  // rows live), so expanding a diff widens the popover; other views keep
-  // the block layout and wrap normally.
+  // content's natural width, clamped between 480 and min(780, viewport-16)
+  // — both bounds +50% of the old 320/520. The natural width must NOT be
+  // multiplied: the observed wrapper is a min-width:100% block, so its
+  // scrollWidth equals the panel width while content fits, and multiplying
+  // would feed back (each resize ×1.5 → clamp 780). Only overflowing
+  // content (long diff rows) pushes scrollWidth past the panel width.
   const bodyRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const [panelWidth, setPanelWidth] = useState(540)
@@ -1042,7 +1043,7 @@ function PillRoot(): JSX.Element {
     const el = contentRef.current
     if (el === null) return
     const observer = new ResizeObserver(() => {
-      const natural = (el.scrollWidth + 28) * 1.5
+      const natural = el.scrollWidth + 28
       const next = Math.min(Math.max(natural, 480), 780, window.innerWidth - 16)
       setPanelWidth(prev => (Math.abs(prev - next) > 4 ? next : prev))
     })
